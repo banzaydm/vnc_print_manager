@@ -3,10 +3,9 @@ version: '3.8'
 services:
   vnc-print-manager:
     build: .
-    container_name: vnc-print-manager
+    image: vnc-print-manager:local
     ports:
       - "5000:5000"  # Веб-интерфейс
-      - "6080:6080"  # noVNC WebSocket прокси
     volumes:
       - ./instance:/app/instance  # Сохранение базы данных и логов
       - ./vnc_manager.db:/app/vnc_manager.db  # База данных SQLite
@@ -15,13 +14,32 @@ services:
       - FLASK_ENV=production
       - NOVNC_PROXY_PORT=6080
       - NOVNC_TOKEN_TTL_SECONDS=600
+      - INIT_DB_ON_START=1
     restart: unless-stopped
+    networks:
+      - vnc_net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',5000)); s.close()"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  websockify:
+    build: .
+    image: vnc-print-manager:local
+    depends_on:
+      - vnc-print-manager
+    ports:
+      - "6080:6080"  # noVNC WebSocket прокси
+    volumes:
+      - ./instance:/app/instance  # Общий TokenFile и логи websockify
+    environment:
+      - NOVNC_PROXY_PORT=6080
+    command: ["python", "-m", "websockify", "--token-plugin", "TokenFile", "--token-source", "/app/instance/novnc_tokens.txt", "--verbose", "6080"]
+    restart: unless-stopped
+    networks:
+      - vnc_net
 
   # Опционально: можно добавить базу данных PostgreSQL для продакшена
   # postgres:
@@ -37,3 +55,7 @@ services:
 
 # volumes:
 #   postgres_data:
+
+networks:
+  vnc_net:
+    driver: bridge

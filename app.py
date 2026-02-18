@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 import subprocess
 import os
 import socket
-import sys
 import secrets
 import threading
 import time
@@ -22,10 +21,13 @@ NOVNC_TOKEN_TTL_SECONDS = int(os.environ.get("NOVNC_TOKEN_TTL_SECONDS", "600"))
 os.makedirs(app.instance_path, exist_ok=True)
 _NOVNC_TOKEN_FILE = os.path.join(app.instance_path, "novnc_tokens.txt")
 
+# Гарантируем, что файл токенов существует (даже пустой) — он нужен отдельному сервису websockify.
+if not os.path.exists(_NOVNC_TOKEN_FILE):
+    with open(_NOVNC_TOKEN_FILE, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n")
+
 _novnc_lock = threading.Lock()
 _novnc_tokens = {}  # token -> (host, port, expires_at_epoch)
-_websockify_process = None
-_websockify_log = None
 
 
 def _prune_novnc_tokens_locked(now: float) -> None:
@@ -46,44 +48,6 @@ def _write_novnc_token_file_locked() -> None:
         f.write("\n")
     os.replace(tmp, _NOVNC_TOKEN_FILE)
 
-
-def _ensure_websockify_started() -> None:
-    """
-    Запускает websockify (token-plugin TokenFile) на NOVNC_PROXY_PORT.
-    Стартует один раз и переиспользуется.
-    """
-    global _websockify_process, _websockify_log
-
-    if _websockify_process and _websockify_process.poll() is None:
-        return
-
-    # Гарантируем, что файл токенов существует (даже пустой)
-    os.makedirs(os.path.dirname(_NOVNC_TOKEN_FILE), exist_ok=True)
-    if not os.path.exists(_NOVNC_TOKEN_FILE):
-        with open(_NOVNC_TOKEN_FILE, "w", encoding="utf-8", newline="\n") as f:
-            f.write("\n")
-
-    log_path = os.path.join(app.instance_path, "websockify.log")
-    _websockify_log = open(log_path, "a", encoding="utf-8", errors="replace")
-
-    cmd = [
-        sys.executable,
-        "-m",
-        "websockify",
-        "--token-plugin",
-        "TokenFile",
-        "--token-source",
-        _NOVNC_TOKEN_FILE,
-        "--verbose",
-        str(NOVNC_PROXY_PORT),
-    ]
-
-    _websockify_process = subprocess.Popen(
-        cmd,
-        cwd=os.path.dirname(__file__),
-        stdout=_websockify_log,
-        stderr=_websockify_log,
-    )
 
 def init_db():
     """Инициализация базы данных с тестовыми данными"""
@@ -378,13 +342,14 @@ def printers_api():
         printers = Printer.query.order_by(Printer.name).all()
         result = []
         for printer in printers:
+            is_online = check_printer_status(printer.ip)
             printer_dict = {
                 'id': printer.id,
                 'name': printer.name,
                 'ip': printer.ip,
                 'group_id': printer.group_id,
                 'web_interface': printer.web_interface,
-                'status': 'online' if printer.status else 'offline',
+                'status': 'online' if is_online else 'offline',
                 'comment': printer.comment,
                 'created_at': printer.created_at.isoformat() if printer.created_at else None
             }
@@ -503,11 +468,6 @@ def novnc_token(server_id):
     server = Server.query.get(server_id)
     if not server:
         return jsonify({'success': False, 'message': 'Сервер не найден'}), 404
-
-    try:
-        _ensure_websockify_started()
-    except Exception as e:
-        return jsonify({'success': False, 'message': f'Не удалось запустить websockify: {e}'}), 500
 
     token = secrets.token_urlsafe(18)
     now = time.time()
@@ -869,8 +829,10 @@ def import_data():
         return jsonify({'error': str(e)}), 500
 
 # Инициализация при запуске
-with app.app_context():
-    init_db()
+_INIT_DB_ON_START = os.environ.get("INIT_DB_ON_START", "1").strip().lower() not in {"0", "false", "no", "off"}
+if _INIT_DB_ON_START:
+    with app.app_context():
+        init_db()
 
 if __name__ == '__main__':
     print("=" * 50)
