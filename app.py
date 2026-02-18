@@ -119,6 +119,17 @@ def check_printer_status(ip):
     """Проверка статуса принтера (поддержка Windows и Unix)"""
     try:
         system = platform.system()
+        # В контейнерах/минимальных образах ping может отсутствовать.
+        # В этом случае делаем быструю TCP-проверку на типичных портах принтера/веб-интерфейса.
+        def _tcp_probe(host: str) -> bool:
+            for p in (9100, 631, 515, 80, 443):
+                try:
+                    with socket.create_connection((host, p), timeout=1):
+                        return True
+                except Exception:
+                    continue
+            return False
+
         if system == 'Windows':
             # Windows использует другой синтаксис ping
             result = subprocess.run(['ping', '-n', '1', '-w', '1000', ip], 
@@ -129,7 +140,7 @@ def check_printer_status(ip):
                                   capture_output=True, text=True, timeout=2)
         return result.returncode == 0
     except:
-        return False
+        return _tcp_probe(ip)
 
 def find_vnc_client():
     """Поиск VNC клиента на текущей платформе"""
