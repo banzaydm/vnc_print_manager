@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  vnc-print-manager:
+    build: .
+    container_name: vnc-print-manager
+    ports:
+      - "5000:5000"  # Веб-интерфейс
+      - "6080:6080"  # noVNC WebSocket прокси
+    volumes:
+      - ./instance:/app/instance  # Сохранение базы данных и логов
+      - ./vnc_manager.db:/app/vnc_manager.db  # База данных SQLite
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=production
+      - NOVNC_PROXY_PORT=6080
+      - NOVNC_TOKEN_TTL_SECONDS=600
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Опционально: можно добавить базу данных PostgreSQL для продакшена
+  # postgres:
+  #   image: postgres:15
+  #   container_name: vnc-print-db
+  #   environment:
+  #     POSTGRES_DB: vnc_manager
+  #     POSTGRES_USER: vnc_user
+  #     POSTGRES_PASSWORD: vnc_password
+  #   volumes:
+  #     - postgres_data:/var/lib/postgresql/data
+  #   restart: unless-stopped
+
+# volumes:
+#   postgres_data:

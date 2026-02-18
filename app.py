@@ -1,0 +1,884 @@
+from flask import Flask, request, jsonify
+import subprocess
+import os
+import socket
+import sys
+import secrets
+import threading
+import time
+from datetime import datetime
+import platform
+from models import db, Group, Server, Printer
+
+app = Flask(__name__, static_folder='.', static_url_path='')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///vnc_manager.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+
+db.init_app(app)
+
+# --- noVNC / websockify ---
+NOVNC_PROXY_PORT = int(os.environ.get("NOVNC_PROXY_PORT", "6080"))
+NOVNC_TOKEN_TTL_SECONDS = int(os.environ.get("NOVNC_TOKEN_TTL_SECONDS", "600"))
+os.makedirs(app.instance_path, exist_ok=True)
+_NOVNC_TOKEN_FILE = os.path.join(app.instance_path, "novnc_tokens.txt")
+
+_novnc_lock = threading.Lock()
+_novnc_tokens = {}  # token -> (host, port, expires_at_epoch)
+_websockify_process = None
+_websockify_log = None
+
+
+def _prune_novnc_tokens_locked(now: float) -> None:
+    expired = [t for t, (_, __, exp) in _novnc_tokens.items() if exp <= now]
+    for t in expired:
+        _novnc_tokens.pop(t, None)
+
+
+def _write_novnc_token_file_locked() -> None:
+    # TokenFile expects lines: token: host:port
+    lines = []
+    for token, (host, port, exp) in _novnc_tokens.items():
+        if exp > time.time():
+            lines.append(f"{token}: {host}:{int(port)}")
+    tmp = _NOVNC_TOKEN_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines))
+        f.write("\n")
+    os.replace(tmp, _NOVNC_TOKEN_FILE)
+
+
+def _ensure_websockify_started() -> None:
+    """
+    Запускает websockify (token-plugin TokenFile) на NOVNC_PROXY_PORT.
+    Стартует один раз и переиспользуется.
+    """
+    global _websockify_process, _websockify_log
+
+    if _websockify_process and _websockify_process.poll() is None:
+        return
+
+    # Гарантируем, что файл токенов существует (даже пустой)
+    os.makedirs(os.path.dirname(_NOVNC_TOKEN_FILE), exist_ok=True)
+    if not os.path.exists(_NOVNC_TOKEN_FILE):
+        with open(_NOVNC_TOKEN_FILE, "w", encoding="utf-8", newline="\n") as f:
+            f.write("\n")
+
+    log_path = os.path.join(app.instance_path, "websockify.log")
+    _websockify_log = open(log_path, "a", encoding="utf-8", errors="replace")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "websockify",
+        "--token-plugin",
+        "TokenFile",
+        "--token-source",
+        _NOVNC_TOKEN_FILE,
+        "--verbose",
+        str(NOVNC_PROXY_PORT),
+    ]
+
+    _websockify_process = subprocess.Popen(
+        cmd,
+        cwd=os.path.dirname(__file__),
+        stdout=_websockify_log,
+        stderr=_websockify_log,
+    )
+
+def init_db():
+    """Инициализация базы данных с тестовыми данными"""
+    with app.app_context():
+        db.create_all()
+        
+        # Создаем тестовые группы если их нет
+        if Group.query.count() == 0:
+            groups = [
+                Group(name="Серверы отдела", color="#3498db", parent_id=None),
+                Group(name="Принтеры", color="#e74c3c", parent_id=None),
+                Group(name="Производство", color="#2ecc71", parent_id=None),
+                Group(name="Офис", color="#f39c12", parent_id=None),
+                Group(name="Склад", color="#9b59b6", parent_id=None),
+            ]
+            for group in groups:
+                db.session.add(group)
+            db.session.commit()
+            
+            # Получаем ID созданных групп
+            group_map = {g.name: g.id for g in Group.query.all()}
+            
+            # Тестовые серверы
+            servers = [
+                Server(name="Сервер 1", ip="192.168.1.100", port=5900, 
+                      group_id=group_map["Серверы отдела"], is_favorite=False, 
+                      comment="Основной сервер"),
+                Server(name="Сервер 2", ip="192.168.1.101", port=5901, 
+                      group_id=group_map["Серверы отдела"], is_favorite=True, 
+                      comment="Резервный сервер"),
+                Server(name="Производство 1", ip="192.168.1.200", port=5900, 
+                      group_id=group_map["Производство"], comment=""),
+            ]
+            
+            for server in servers:
+                db.session.add(server)
+            
+            # Тестовые принтеры
+            printers = [
+                Printer(name="Принтер HP", ip="192.168.1.50", 
+                       group_id=group_map["Принтеры"], 
+                       web_interface="http://192.168.1.50", 
+                       comment="Основной принтер"),
+                Printer(name="Копир Canon", ip="192.168.1.51", 
+                       group_id=group_map["Принтеры"],
+                       web_interface="http://192.168.1.51"),
+                Printer(name="Складской принтер", ip="192.168.1.52", 
+                       group_id=group_map["Склад"]),
+            ]
+            
+            for printer in printers:
+                db.session.add(printer)
+            
+            db.session.commit()
+            print("База данных инициализирована с тестовыми данными")
+
+def check_server_status(ip, port=5900):
+    """Проверка статуса сервера VNC"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1)
+        result = sock.connect_ex((ip, port))
+        sock.close()
+        return result == 0
+    except:
+        return False
+
+def check_printer_status(ip):
+    """Проверка статуса принтера (поддержка Windows и Unix)"""
+    try:
+        system = platform.system()
+        if system == 'Windows':
+            # Windows использует другой синтаксис ping
+            result = subprocess.run(['ping', '-n', '1', '-w', '1000', ip], 
+                                  capture_output=True, text=True, timeout=2)
+        else:
+            # Unix/Linux/macOS
+            result = subprocess.run(['ping', '-c', '1', '-W', '1', ip], 
+                                  capture_output=True, text=True, timeout=2)
+        return result.returncode == 0
+    except:
+        return False
+
+def find_vnc_client():
+    """Поиск VNC клиента на текущей платформе"""
+    system = platform.system()
+    
+    if system == 'Darwin':  # macOS
+        return find_vnc_client_mac()
+    elif system == 'Windows':
+        return find_vnc_client_windows()
+    elif system == 'Linux':
+        return find_vnc_client_linux()
+    else:
+        return None, None
+
+def find_vnc_client_mac():
+    """Поиск VNC клиента на macOS"""
+    clients = [
+        ("RealVNC", "/Applications/RealVNC Viewer.app/Contents/MacOS/vncviewer"),
+        ("Chicken VNC", "/Applications/Chicken.app/Contents/MacOS/Chicken"),
+        ("VNC Viewer", "/Applications/VNC Viewer.app/Contents/MacOS/vncviewer"),
+        ("Screen Sharing", "/System/Library/CoreServices/Applications/Screen Sharing.app/Contents/MacOS/Screen Sharing"),
+    ]
+    
+    for client_name, path in clients:
+        if os.path.exists(path):
+            return path, client_name
+    
+    return None, None
+
+def find_vnc_client_windows():
+    """Поиск VNC клиента на Windows"""
+    program_paths = [
+        "C:\\Program Files\\RealVNC\\VNC Viewer\\vncviewer.exe",
+        "C:\\Program Files (x86)\\RealVNC\\VNC Viewer\\vncviewer.exe",
+        "C:\\Program Files\\TightVNC\\tvnviewer.exe",
+        "C:\\Program Files (x86)\\TightVNC\\tvnviewer.exe",
+    ]
+    
+    for path in program_paths:
+        if os.path.exists(path):
+            client_name = os.path.basename(os.path.dirname(path))
+            return path, client_name
+    
+    return None, None
+
+def find_vnc_client_linux():
+    """Поиск VNC клиента на Linux"""
+    common_paths = [
+        "/usr/bin/vncviewer",
+        "/usr/local/bin/vncviewer",
+        "/usr/bin/xtightvncviewer",
+        "/usr/bin/xtigervncviewer",
+        "/usr/bin/vinagre",
+        "/usr/bin/remmina",
+    ]
+    
+    for path in common_paths:
+        if os.path.exists(path):
+            client_name = os.path.basename(path)
+            return path, client_name
+    
+    return None, None
+
+@app.route('/')
+def index():
+    return app.send_static_file('index.html')
+
+# API для групп
+@app.route('/api/groups', methods=['GET', 'POST'])
+def groups_api():
+    if request.method == 'GET':
+        groups = Group.query.order_by(Group.name).all()
+        result = []
+        for group in groups:
+            group_dict = {
+                'id': group.id,
+                'name': group.name,
+                'color': group.color,
+                'parent_id': group.parent_id,
+                'servers_count': Server.query.filter_by(group_id=group.id).count(),
+                'printers_count': Printer.query.filter_by(group_id=group.id).count()
+            }
+            result.append(group_dict)
+        return jsonify(result)
+    
+    elif request.method == 'POST':
+        data = request.json
+        
+        if 'id' in data and data['id']:
+            group = Group.query.get(data['id'])
+            if not group:
+                return jsonify({'error': 'Группа не найдена'}), 404
+            group.name = data['name']
+            group.color = data.get('color', '#3498db')
+            group.parent_id = data.get('parent_id')
+            group_id = group.id
+        else:
+            group = Group(
+                name=data['name'],
+                color=data.get('color', '#3498db'),
+                parent_id=data.get('parent_id')
+            )
+            db.session.add(group)
+            db.session.flush()
+            group_id = group.id
+        
+        db.session.commit()
+        return jsonify({'success': True, 'id': group_id})
+
+@app.route('/api/groups/<int:group_id>', methods=['DELETE'])
+def delete_group(group_id):
+    group = Group.query.get(group_id)
+    if not group:
+        return jsonify({'error': 'Группа не найдена'}), 404
+    
+    # Удаляем связи с устройствами
+    Server.query.filter_by(group_id=group_id).update({'group_id': None})
+    Printer.query.filter_by(group_id=group_id).update({'group_id': None})
+    
+    db.session.delete(group)
+    db.session.commit()
+    return jsonify({'success': True})
+
+# API для серверов
+@app.route('/api/servers', methods=['GET'])
+def get_servers():
+    servers = Server.query.order_by(Server.name).all()
+    result = []
+    for server in servers:
+        server_dict = {
+            'id': server.id,
+            'name': server.name,
+            'ip': server.ip,
+            'port': server.port,
+            'group_id': server.group_id,
+            'is_favorite': server.is_favorite,
+            'last_seen': server.last_seen.isoformat() if server.last_seen else None,
+            'comment': server.comment,
+            'created_at': server.created_at.isoformat() if server.created_at else None,
+            'status': 'online' if check_server_status(server.ip, server.port) else 'offline'
+        }
+        
+        if server.group:
+            server_dict['group_name'] = server.group.name
+            server_dict['group_color'] = server.group.color
+        
+        result.append(server_dict)
+    
+    return jsonify(result)
+
+@app.route('/api/servers', methods=['POST'])
+def add_server():
+    data = request.json
+    
+    # Проверка на дубликат IP
+    if Server.query.filter_by(ip=data['ip']).first():
+        return jsonify({'error': 'IP адрес уже существует'}), 400
+    
+    server = Server(
+        name=data['name'],
+        ip=data['ip'],
+        port=data.get('port', 5900),
+        group_id=data.get('group_id'),
+        comment=data.get('comment', '')
+    )
+    
+    db.session.add(server)
+    db.session.commit()
+    return jsonify({'success': True, 'id': server.id})
+
+@app.route('/api/servers/<int:server_id>', methods=['PUT', 'DELETE'])
+def server_api(server_id):
+    server = Server.query.get(server_id)
+    if not server:
+        return jsonify({'error': 'Сервер не найден'}), 404
+    
+    if request.method == 'PUT':
+        data = request.json
+        
+        # Проверка на дубликат IP при изменении
+        if 'ip' in data and data['ip'] != server.ip:
+            if Server.query.filter_by(ip=data['ip']).first():
+                return jsonify({'error': 'IP адрес уже существует'}), 400
+        
+        if 'name' in data:
+            server.name = data['name']
+        if 'ip' in data:
+            server.ip = data['ip']
+        if 'port' in data:
+            server.port = data['port']
+        if 'group_id' in data:
+            server.group_id = data['group_id']
+        if 'comment' in data:
+            server.comment = data['comment']
+        if 'is_favorite' in data:
+            server.is_favorite = bool(data['is_favorite'])
+        
+        db.session.commit()
+        return jsonify({'success': True})
+    
+    elif request.method == 'DELETE':
+        db.session.delete(server)
+        db.session.commit()
+        return jsonify({'success': True})
+
+# API для принтеров
+@app.route('/api/printers', methods=['GET', 'POST'])
+def printers_api():
+    if request.method == 'GET':
+        printers = Printer.query.order_by(Printer.name).all()
+        result = []
+        for printer in printers:
+            printer_dict = {
+                'id': printer.id,
+                'name': printer.name,
+                'ip': printer.ip,
+                'group_id': printer.group_id,
+                'web_interface': printer.web_interface,
+                'status': 'online' if printer.status else 'offline',
+                'comment': printer.comment,
+                'created_at': printer.created_at.isoformat() if printer.created_at else None
+            }
+            
+            if printer.group:
+                printer_dict['group_name'] = printer.group.name
+                printer_dict['group_color'] = printer.group.color
+            
+            result.append(printer_dict)
+        
+        return jsonify(result)
+    
+    elif request.method == 'POST':
+        data = request.json
+        
+        # Проверка на дубликат IP
+        if Printer.query.filter_by(ip=data['ip']).first():
+            return jsonify({'error': 'IP адрес уже существует'}), 400
+        
+        printer = Printer(
+            name=data['name'],
+            ip=data['ip'],
+            group_id=data.get('group_id'),
+            web_interface=data.get('web_interface', f"http://{data['ip']}"),
+            comment=data.get('comment', '')
+        )
+        
+        db.session.add(printer)
+        db.session.commit()
+        return jsonify({'success': True, 'id': printer.id})
+
+@app.route('/api/printers/<int:printer_id>', methods=['PUT', 'DELETE'])
+def printer_api(printer_id):
+    printer = Printer.query.get(printer_id)
+    if not printer:
+        return jsonify({'error': 'Принтер не найден'}), 404
+    
+    if request.method == 'PUT':
+        data = request.json
+        
+        # Проверка на дубликат IP при изменении
+        if 'ip' in data and data['ip'] != printer.ip:
+            if Printer.query.filter_by(ip=data['ip']).first():
+                return jsonify({'error': 'IP адрес уже существует'}), 400
+        
+        if 'name' in data:
+            printer.name = data['name']
+        if 'ip' in data:
+            printer.ip = data['ip']
+        if 'group_id' in data:
+            printer.group_id = data['group_id']
+        if 'web_interface' in data:
+            printer.web_interface = data['web_interface']
+        if 'comment' in data:
+            printer.comment = data['comment']
+        
+        db.session.commit()
+        return jsonify({'success': True})
+    
+    elif request.method == 'DELETE':
+        db.session.delete(printer)
+        db.session.commit()
+        return jsonify({'success': True})
+
+@app.route('/api/connect/<int:server_id>', methods=['POST'])
+def connect_vnc(server_id):
+    """Подключение к VNC серверу"""
+    server = Server.query.get(server_id)
+    if not server:
+        return jsonify({'success': False, 'message': 'Сервер не найден'})
+    
+    vnc_path, client_name = find_vnc_client()
+    
+    if not vnc_path:
+        return jsonify({
+            'success': False,
+            'message': 'VNC клиент не найден',
+            'instructions': [
+                'Установите один из VNC клиентов:',
+                '- TightVNC: http://www.tightvnc.com/download.php',
+                '- RealVNC Viewer: https://www.realvnc.com/en/connect/download/viewer/',
+                '',
+                'Или подключитесь вручную:',
+                f'Адрес: {server.ip}:{server.port}'
+            ]
+        })
+    
+    try:
+        if platform.system() == 'Darwin':
+            if 'Screen Sharing' in vnc_path:
+                subprocess.Popen(['open', f"vnc://{server.ip}:{server.port}"])
+            else:
+                subprocess.Popen([vnc_path, f"{server.ip}:{server.port}"])
+        else:
+            subprocess.Popen([vnc_path, f"{server.ip}:{server.port}"])
+        
+        return jsonify({
+            'success': True,
+            'message': f'Открываю подключение к {server.ip}:{server.port} через {client_name}'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Ошибка при запуске VNC клиента: {str(e)}',
+            'manual_connection': f"Вы можете подключиться вручную: {server.ip}:{server.port}"
+        })
+
+
+@app.route('/api/novnc/<int:server_id>/token', methods=['POST'])
+def novnc_token(server_id):
+    """
+    Выдаёт временный токен для noVNC. Токен мапится на host:port в novnc_tokens.txt
+    и используется websockify (TokenFile).
+    """
+    server = Server.query.get(server_id)
+    if not server:
+        return jsonify({'success': False, 'message': 'Сервер не найден'}), 404
+
+    try:
+        _ensure_websockify_started()
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Не удалось запустить websockify: {e}'}), 500
+
+    token = secrets.token_urlsafe(18)
+    now = time.time()
+    expires_at = now + NOVNC_TOKEN_TTL_SECONDS
+
+    with _novnc_lock:
+        _prune_novnc_tokens_locked(now)
+        _novnc_tokens[token] = (server.ip, server.port, expires_at)
+        _write_novnc_token_file_locked()
+
+    return jsonify(
+        {
+            "success": True,
+            "token": token,
+            "proxy_port": NOVNC_PROXY_PORT,
+            "expires_in_seconds": NOVNC_TOKEN_TTL_SECONDS,
+            "server": {"id": server.id, "name": server.name, "ip": server.ip, "port": server.port},
+        }
+    )
+
+
+@app.route('/novnc/<int:server_id>')
+def novnc_page(server_id):
+    server = Server.query.get(server_id)
+    if not server:
+        return "Сервер не найден", 404
+
+    # Минимальная страница noVNC. Библиотеку берём с CDN, прокси — websockify на NOVNC_PROXY_PORT.
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>noVNC — {server.name}</title>
+  <style>
+    :root {{
+      --bg: #0f172a;
+      --panel: #111827;
+      --text: #e5e7eb;
+      --muted: #9ca3af;
+      --ok: #10b981;
+      --bad: #ef4444;
+      --btn: #2563eb;
+      --btn2: #374151;
+      --border: rgba(255,255,255,.12);
+    }}
+    html, body {{ height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }}
+    .wrap {{ display: grid; grid-template-rows: auto 1fr; height: 100%; }}
+    .top {{
+      display: flex; gap: 12px; align-items: center; justify-content: space-between;
+      padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
+    }}
+    .title {{ display: flex; flex-direction: column; gap: 2px; min-width: 0; }}
+    .title strong {{ font-size: 14px; }}
+    .title span {{ font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
+    .actions {{ display: flex; gap: 8px; align-items: center; flex-shrink: 0; }}
+    button {{
+      height: 34px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer;
+      padding: 0 10px; color: var(--text); background: var(--btn2);
+    }}
+    button.primary {{ background: var(--btn); border-color: rgba(37,99,235,.6); }}
+    #status {{ font-size: 12px; color: var(--muted); }}
+    #status.ok {{ color: var(--ok); }}
+    #status.bad {{ color: var(--bad); }}
+    #screen {{
+      width: 100%;
+      height: 100%;
+      background: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }}
+    #screen canvas {{
+      /* Вписываем с сохранением пропорций (letterbox/pillarbox) */
+      max-width: 100% !important;
+      max-height: 100% !important;
+      width: auto !important;
+      height: auto !important;
+    }}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="title">
+        <strong>noVNC — {server.name}</strong>
+        <span>{server.ip}:{server.port}</span>
+      </div>
+      <div class="actions">
+        <div id="status">Подготовка…</div>
+        <button id="btnReconnect" class="primary">Подключиться</button>
+        <button id="btnDisconnect">Отключить</button>
+      </div>
+    </div>
+    <div id="screen"></div>
+  </div>
+
+  <script type="module">
+    import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@latest/core/rfb.js';
+
+    const serverId = {server.id};
+    const statusEl = document.getElementById('status');
+    const screen = document.getElementById('screen');
+    const btnReconnect = document.getElementById('btnReconnect');
+    const btnDisconnect = document.getElementById('btnDisconnect');
+
+    let rfb = null;
+    let ro = null;
+
+    function setStatus(text, kind) {{
+      statusEl.textContent = text;
+      statusEl.classList.remove('ok', 'bad');
+      if (kind) statusEl.classList.add(kind);
+    }}
+
+    async function connect() {{
+      try {{
+        setStatus('Получаю токен…');
+        const resp = await fetch(`/api/novnc/${{serverId}}/token`, {{ method: 'POST' }});
+        const data = await resp.json();
+        if (!resp.ok || !data.success) {{
+          throw new Error(data.message || 'Не удалось получить токен');
+        }}
+
+        const scheme = (location.protocol === 'https:') ? 'wss' : 'ws';
+        const host = location.hostname;
+        const wsUrl = `${{scheme}}://${{host}}:${{data.proxy_port}}/?token=${{encodeURIComponent(data.token)}}`;
+
+        if (rfb) {{
+          try {{ rfb.disconnect(); }} catch (_) {{}}
+          rfb = null;
+        }}
+
+        setStatus('Подключаюсь…');
+        rfb = new RFB(screen, wsUrl, {{ shared: true }});
+        // Масштабируем картинку под контейнер с сохранением пропорций
+        rfb.scaleViewport = true;
+        rfb.clipViewport = false;
+        // Не навязываем удалённой машине новый размер: сохраняем её разрешение,
+        // а в браузере делаем корректное (proportional) масштабирование.
+        rfb.resizeSession = false;
+
+        rfb.addEventListener('connect', () => setStatus('Подключено', 'ok'));
+        rfb.addEventListener('disconnect', (e) => {{
+          const detail = e?.detail;
+          const clean = detail?.clean;
+          const reason = detail?.reason || '';
+          setStatus(clean ? 'Отключено' : `Ошибка: ${{reason || 'соединение потеряно'}}`, clean ? undefined : 'bad');
+        }});
+
+        rfb.addEventListener('credentialsrequired', () => {{
+          const password = prompt('Введите пароль VNC (если требуется):') || '';
+          try {{
+            rfb.sendCredentials({{ password }});
+          }} catch (e) {{
+            setStatus('Не удалось отправить пароль', 'bad');
+          }}
+        }});
+
+        // Автомасштабирование при изменении размеров вкладки/контейнера
+        if (ro) {{
+          try {{ ro.disconnect(); }} catch (_) {{}}
+          ro = null;
+        }}
+        ro = new ResizeObserver(() => {{
+          if (!rfb) return;
+          // сеттер scaleViewport триггерит пересчёт масштаба
+          rfb.scaleViewport = true;
+        }});
+        ro.observe(screen);
+      }} catch (e) {{
+        setStatus(`Ошибка: ${{e.message || e}}`, 'bad');
+      }}
+    }}
+
+    function disconnect() {{
+      if (rfb) {{
+        try {{ rfb.disconnect(); }} catch (_) {{}}
+        rfb = null;
+      }}
+      if (ro) {{
+        try {{ ro.disconnect(); }} catch (_) {{}}
+        ro = null;
+      }}
+      setStatus('Отключено');
+    }}
+
+    btnReconnect.addEventListener('click', connect);
+    btnDisconnect.addEventListener('click', disconnect);
+    window.addEventListener('resize', () => {{
+      if (rfb) rfb.scaleViewport = true;
+    }});
+
+    // Автоподключение
+    connect();
+  </script>
+</body>
+</html>"""
+
+@app.route('/api/export', methods=['GET'])
+def export_data():
+    """Экспорт всех данных в JSON"""
+    try:
+        groups = Group.query.all()
+        servers = Server.query.all()
+        printers = Printer.query.all()
+        
+        groups_data = []
+        for group in groups:
+            groups_data.append({
+                'id': group.id,
+                'name': group.name,
+                'color': group.color,
+                'parent_id': group.parent_id
+            })
+        
+        servers_data = []
+        for server in servers:
+            servers_data.append({
+                'id': server.id,
+                'name': server.name,
+                'ip': server.ip,
+                'port': server.port,
+                'group_id': server.group_id,
+                'is_favorite': server.is_favorite,
+                'last_seen': server.last_seen.isoformat() if server.last_seen else None,
+                'comment': server.comment,
+                'created_at': server.created_at.isoformat() if server.created_at else None,
+                'status': 'online' if check_server_status(server.ip, server.port) else 'offline'
+            })
+        
+        printers_data = []
+        for printer in printers:
+            printers_data.append({
+                'id': printer.id,
+                'name': printer.name,
+                'ip': printer.ip,
+                'group_id': printer.group_id,
+                'web_interface': printer.web_interface,
+                'status': 'online' if printer.status else 'offline',
+                'comment': printer.comment,
+                'created_at': printer.created_at.isoformat() if printer.created_at else None
+            })
+        
+        export_data = {
+            'metadata': {
+                'exported_at': datetime.now().isoformat(),
+                'version': '2.0',
+                'total_servers': len(servers_data),
+                'total_printers': len(printers_data),
+                'total_groups': len(groups_data)
+            },
+            'groups': groups_data,
+            'servers': servers_data,
+            'printers': printers_data
+        }
+        
+        return jsonify(export_data)
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/import', methods=['POST'])
+def import_data():
+    """Импорт данных из JSON"""
+    try:
+        data = request.json
+        
+        if not data:
+            return jsonify({'error': 'Нет данных для импорта'}), 400
+        
+        mode = data.get('mode', 'merge')
+        
+        if mode == 'overwrite':
+            Server.query.delete()
+            Printer.query.delete()
+            Group.query.delete()
+            db.session.commit()
+        
+        groups_data = data.get('groups', [])
+        group_map = {}
+        
+        for group_data in groups_data:
+            group_id = group_data.get('id')
+            if group_id and Group.query.get(group_id):
+                group = Group.query.get(group_id)
+                group.name = group_data['name']
+                group.color = group_data.get('color', '#3498db')
+                group.parent_id = group_data.get('parent_id')
+                new_group_id = group.id
+            else:
+                group = Group(
+                    name=group_data['name'],
+                    color=group_data.get('color', '#3498db'),
+                    parent_id=group_data.get('parent_id')
+                )
+                db.session.add(group)
+                db.session.flush()
+                new_group_id = group.id
+            
+            if group_id:
+                group_map[group_id] = new_group_id
+        
+        db.session.commit()
+        
+        servers_data = data.get('servers', [])
+        for server_data in servers_data:
+            group_id = group_map.get(server_data.get('group_id')) if server_data.get('group_id') else None
+            
+            if Server.query.filter_by(ip=server_data['ip']).first():
+                # Обновляем существующий сервер
+                server = Server.query.filter_by(ip=server_data['ip']).first()
+                server.name = server_data['name']
+                server.port = server_data.get('port', 5900)
+                server.group_id = group_id
+                server.is_favorite = server_data.get('is_favorite', False)
+                server.comment = server_data.get('comment', '')
+            else:
+                # Создаем новый сервер
+                server = Server(
+                    name=server_data['name'],
+                    ip=server_data['ip'],
+                    port=server_data.get('port', 5900),
+                    group_id=group_id,
+                    is_favorite=server_data.get('is_favorite', False),
+                    comment=server_data.get('comment', '')
+                )
+                db.session.add(server)
+        
+        printers_data = data.get('printers', [])
+        for printer_data in printers_data:
+            group_id = group_map.get(printer_data.get('group_id')) if printer_data.get('group_id') else None
+            
+            if Printer.query.filter_by(ip=printer_data['ip']).first():
+                # Обновляем существующий принтер
+                printer = Printer.query.filter_by(ip=printer_data['ip']).first()
+                printer.name = printer_data['name']
+                printer.group_id = group_id
+                printer.web_interface = printer_data.get('web_interface', '')
+                printer.comment = printer_data.get('comment', '')
+            else:
+                # Создаем новый принтер
+                printer = Printer(
+                    name=printer_data['name'],
+                    ip=printer_data['ip'],
+                    group_id=group_id,
+                    web_interface=printer_data.get('web_interface', ''),
+                    comment=printer_data.get('comment', '')
+                )
+                db.session.add(printer)
+        
+        db.session.commit()
+        
+        return jsonify({'success': True, 'message': 'Данные успешно импортированы'})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# Инициализация при запуске
+with app.app_context():
+    init_db()
+
+if __name__ == '__main__':
+    print("=" * 50)
+    print("VNC & Printer Manager запущен!")
+    print("=" * 50)
+    print(f"Платформа: {platform.system()}")
+    print("Откройте в браузере: http://localhost:5000")
+    print("Доступно по сети: http://<ваш_ip>:5000")
+    print("=" * 50)
+    
+    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
