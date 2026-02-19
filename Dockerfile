@@ -1,7 +1,10 @@
 FROM python:3.11-slim
 
 # Устанавливаем системные зависимости (включая ping)
-RUN apt-get update && apt-get install -y iputils-ping && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && \
+    apt-get install -y iputils-ping && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Устанавливаем рабочую директорию
 WORKDIR /app
