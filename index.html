@@ -849,6 +849,20 @@
         .tree-content.expanded {
             display: block;
         }
+
+        /* Компактный режим для дерева на вкладке "Все" */
+        #allGroupsContainer .tree-header {
+            padding: 8px;
+        }
+
+        #allGroupsContainer .tree-content {
+            margin-left: 28px;
+            padding-left: 10px;
+        }
+
+        #allGroupsContainer .tree-stats {
+            font-size: 11px;
+        }
         
         /* Уведомления */
         .notification {
@@ -969,6 +983,85 @@
                 width: 100%;
             }
         }
+
+        /* Выпадающий фильтр групп — внешний вид как у остальных select */
+        #groupFilterDropdown {
+            width: 180px;
+        }
+
+        #groupFilterBtn.filter-select {
+            appearance: none;
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            background: var(--input-bg);
+            border: 1px solid var(--input-border);
+            border-radius: 8px;
+            padding: 0 12px;
+            height: 40px;
+            font-size: 14px;
+            color: var(--text-color);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+        }
+
+        #groupFilterBtn.filter-select:focus {
+            outline: none;
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-light);
+        }
+
+        #groupFilterLabel {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Компактный режим для дерева на вкладке "Группы" */
+        #groupsContainer .tree-header {
+            padding: 8px;
+        }
+
+        #groupsContainer .tree-content {
+            margin-left: 28px;
+            padding-left: 10px;
+            margin-top: 6px;
+        }
+
+        #groupFilterMenu {
+            background: var(--card-bg);
+            color: var(--text-color);
+            font-size: 12px;
+            padding: 8px;
+            border: 1px solid var(--card-border);
+            box-shadow: var(--shadow-lg);
+        }
+
+        #groupFilterMenu .group-filter-item {
+            font-size: 12px;
+            padding: 6px 10px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        #groupFilterMenu .group-filter-node {
+            font-size: 12px;
+            padding: 4px 6px;
+        }
+
+        #groupFilterMenu .group-filter-toggle {
+            width: 18px;
+            height: 18px;
+            font-size: 11px;
+        }
+
+        #groupFilterMenu .group-filter-children {
+            margin-left: 18px;
+            padding-left: 10px;
+            border-left: 1px dashed var(--card-border);
+        }
     </style>
 </head>
 <body data-theme="light">
@@ -984,7 +1077,11 @@
                 </div>
                 
                 <div class="nav-tabs">
-                    <button class="nav-tab active" data-page="all">
+                    <button class="nav-tab active" data-page="favorites">
+                        <i class="fas fa-star"></i>
+                        <span>Избранное</span>
+                    </button>
+                    <button class="nav-tab" data-page="all">
                         <i class="fas fa-list"></i>
                         <span>Все</span>
                     </button>
@@ -995,10 +1092,6 @@
                     <button class="nav-tab" data-page="printers">
                         <i class="fas fa-print"></i>
                         <span>Принтеры</span>
-                    </button>
-                    <button class="nav-tab" data-page="favorites">
-                        <i class="fas fa-star"></i>
-                        <span>Избранное</span>
                     </button>
                     <button class="nav-tab" data-page="groups">
                         <i class="fas fa-tags"></i>
@@ -1011,11 +1104,8 @@
                 <button class="btn-icon" id="themeSwitch" title="Тема">
                     <i class="fas fa-moon"></i>
                 </button>
-                <button class="btn-icon" id="importBtn" title="Импорт">
-                    <i class="fas fa-file-import"></i>
-                </button>
-                <button class="btn-icon" id="exportBtn" title="Экспорт">
-                    <i class="fas fa-file-export"></i>
+                <button class="btn-icon" id="settingsBtn" title="Настройки">
+                    <i class="fas fa-cog"></i>
                 </button>
                 <button class="btn" id="addBtn">
                     <i class="fas fa-plus"></i>
@@ -1047,9 +1137,26 @@
                         <option value="online">Онлайн</option>
                         <option value="offline">Офлайн</option>
                     </select>
-                    <select id="groupFilter" class="filter-select">
-                        <option value="all">Все группы</option>
-                    </select>
+                    <div id="groupFilterDropdown" style="position: relative;">
+                        <input type="hidden" id="groupFilter" value="all">
+                        <button type="button" class="filter-select" id="groupFilterBtn">
+                            <span id="groupFilterLabel">Все группы</span>
+                            <span style="display:flex; align-items:center; gap:8px;">
+                                <i class="fas fa-sitemap" style="opacity: 0.8;"></i>
+                                <i class="fas fa-chevron-down" id="groupFilterChevron" style="opacity: 0.8;"></i>
+                            </span>
+                        </button>
+                        <div id="groupFilterMenu" class="card" style="display:none; position:absolute; z-index: 50; left:0; right:0; top: 44px; max-height: 320px; overflow:auto; padding: 8px; border: 1px solid var(--card-border); box-shadow: var(--shadow-lg);">
+                            <div class="group-filter-item" onclick="selectGroupFilter('all', 'Все группы')" style="padding: 8px 10px; border-radius: 8px; cursor:pointer;">
+                                <strong>Все группы</strong>
+                            </div>
+                            <div class="group-filter-item" onclick="selectGroupFilter('ungrouped', 'Без группы')" style="padding: 8px 10px; border-radius: 8px; cursor:pointer;">
+                                Без группы
+                            </div>
+                            <div style="height: 8px;"></div>
+                            <div id="groupFilterTree" class="tree-container"></div>
+                        </div>
+                    </div>
                     <button class="btn btn-sm" id="refreshBtn">
                         <i class="fas fa-sync-alt"></i>
                         <span>Обновить</span>
@@ -1101,6 +1208,25 @@
                         <button class="btn" id="addFirstBtn">
                             <i class="fas fa-plus"></i>
                             <span>Добавить устройство</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="allGroupsContainer" style="display: none;">
+                <div class="table-container">
+                    <div class="table-header">
+                        <h2>Группы и устройства</h2>
+                        <div class="table-stats" id="allGroupsStats">0</div>
+                    </div>
+                    <div id="allGroupsTree" class="tree-container" style="padding: 16px;"></div>
+                    <div id="allGroupsEmpty" class="empty-state" style="display: none;">
+                        <div class="empty-icon"><i class="fas fa-tags"></i></div>
+                        <h3 class="empty-title">Группы не найдены</h3>
+                        <p class="empty-description">Создайте вашу первую группу</p>
+                        <button class="btn" onclick="showGroupModal()">
+                            <i class="fas fa-plus"></i>
+                            <span>Добавить группу</span>
                         </button>
                     </div>
                 </div>
@@ -1198,6 +1324,94 @@
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal()">Отмена</button>
                 <button class="btn" onclick="saveDevice()">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="moveModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Переместить</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">В группу</label>
+                    <select id="moveTargetGroup" class="form-input form-select">
+                        <option value="">Без группы</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal()">Отмена</button>
+                <button class="btn" onclick="confirmMove()">Переместить</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="clearDbModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Очистка базы данных</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="clearDbStep1">
+                    <p style="margin: 0;">Очистить базу данных? Все группы, серверы и принтеры будут удалены.</p>
+                </div>
+                <div id="clearDbStep2" style="display: none;">
+                    <p style="margin: 0;">Подтвердите очистку базы данных (действие необратимо).</p>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal()">Отмена</button>
+                <button class="btn" id="clearDbNextBtn" onclick="clearDbNext()">Продолжить</button>
+                <button class="btn" id="clearDbConfirmBtn" onclick="clearDbConfirm()" style="display: none;">Очистить</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="settingsModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Настройки</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group" style="margin-bottom: 18px;">
+                    <label class="form-label">Данные</label>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button class="btn" onclick="showImportExportModal()">
+                            <i class="fas fa-file-export"></i>
+                            <span>Импорт / Экспорт</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Очистка базы (выборочно)</label>
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="clearDbServers" checked>
+                            Серверы
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="clearDbPrinters" checked>
+                            Принтеры
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="clearDbGroups" checked>
+                            Группы
+                        </label>
+                    </div>
+                    <button class="btn" onclick="openSelectiveClearModal()" style="margin-top: 14px;">
+                        <i class="fas fa-broom"></i>
+                        <span>Очистить</span>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal()">Закрыть</button>
             </div>
         </div>
     </div>
@@ -1322,7 +1536,7 @@
 
     <script>
         // Глобальные переменные
-        let currentPage = 'all';
+        let currentPage = 'favorites';
         let devices = [];
         let groups = [];
         let editingDeviceId = null;
@@ -1330,6 +1544,9 @@
         let editingGroupId = null;
         let currentSort = { field: 'name', direction: 'asc' };
         let expandedGroups = new Set();
+        let _clearDbOptions = { clear_servers: true, clear_printers: true, clear_groups: true };
+        let expandedGroupFilterNodes = new Set();
+        let moveContext = null;
         
         // Инициализация при загрузке
         document.addEventListener('DOMContentLoaded', function() {
@@ -1343,7 +1560,7 @@
             
             // Загружаем данные
             loadData().then(() => {
-                showPage('all');
+                showPage('favorites');
             });
         });
         
@@ -1362,8 +1579,7 @@
             // Кнопки в шапке
             document.getElementById('addBtn').addEventListener('click', () => showDeviceModal());
             document.getElementById('addGroupBtn').addEventListener('click', () => showGroupModal());
-            document.getElementById('importBtn').addEventListener('click', showImportExportModal);
-            document.getElementById('exportBtn').addEventListener('click', showImportExportModal);
+            document.getElementById('settingsBtn').addEventListener('click', showSettingsModal);
             document.getElementById('addFirstBtn')?.addEventListener('click', () => showDeviceModal());
             document.getElementById('addGroupFirstBtn')?.addEventListener('click', () => showGroupModal());
             
@@ -1371,12 +1587,26 @@
             document.getElementById('searchInput')?.addEventListener('input', filterDevices);
             document.getElementById('typeFilter')?.addEventListener('change', filterDevices);
             document.getElementById('statusFilter')?.addEventListener('change', filterDevices);
-            document.getElementById('groupFilter')?.addEventListener('change', filterDevices);
+            document.getElementById('groupFilterBtn')?.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                toggleGroupFilterMenu();
+            });
             document.getElementById('refreshBtn')?.addEventListener('click', loadData);
+
+            document.addEventListener('click', (e) => {
+                const menu = document.getElementById('groupFilterMenu');
+                const dropdown = document.getElementById('groupFilterDropdown');
+                if (!menu || !dropdown) return;
+                if (menu.style.display === 'none') return;
+                if (!dropdown.contains(e.target)) {
+                    closeGroupFilterMenu();
+                }
+            });
             
             // Сортировка
-            document.querySelectorAll('.table th.sortable').forEach(th => {
-                th.addEventListener('click', function() {
+            document.querySelectorAll('.sortable').forEach(header => {
+                header.addEventListener('click', function() {
                     const field = this.dataset.sort;
                     sortTable(field);
                 });
@@ -1448,7 +1678,11 @@
                 const groupsResponse = await fetch('/api/groups');
                 if (!groupsResponse.ok) throw new Error('Ошибка загрузки групп');
                 groups = await groupsResponse.json();
-                updateGroupFilters();
+                try {
+                    updateGroupFilters();
+                } catch (e) {
+                    console.error('Ошибка обновления фильтров групп:', e);
+                }
                 
                 // Загружаем устройства
                 await loadDevices();
@@ -1497,17 +1731,26 @@
         
         function updateGroupFilters() {
             const groupFilter = document.getElementById('groupFilter');
+            const groupFilterLabel = document.getElementById('groupFilterLabel');
+            const groupFilterTree = document.getElementById('groupFilterTree');
             const deviceGroup = document.getElementById('deviceGroup');
             const parentGroup = document.getElementById('parentGroup');
+            const moveTargetGroup = document.getElementById('moveTargetGroup');
             
             // Обновляем фильтр групп
-            if (groupFilter) {
-                const currentFilter = groupFilter.value;
-                groupFilter.innerHTML = '<option value="all">Все группы</option>';
-                groups.forEach(group => {
-                    groupFilter.innerHTML += `<option value="${group.id}">${escapeHtml(group.name)}</option>`;
-                });
-                if (currentFilter) groupFilter.value = currentFilter;
+            if (groupFilter && groupFilterTree) {
+                const currentFilter = groupFilter.value || 'all';
+                renderGroupFilterTree(groupFilterTree);
+
+                if (currentFilter === 'all') {
+                    if (groupFilterLabel) groupFilterLabel.textContent = 'Все группы';
+                } else if (currentFilter === 'ungrouped') {
+                    if (groupFilterLabel) groupFilterLabel.textContent = 'Без группы';
+                } else {
+                    const gid = parseInt(currentFilter);
+                    const g = groups.find(x => x.id === gid);
+                    if (groupFilterLabel) groupFilterLabel.textContent = g ? g.name : 'Группа';
+                }
             }
             
             // Обновляем выбор группы для устройства
@@ -1529,6 +1772,138 @@
                 });
                 if (currentParentGroup) parentGroup.value = currentParentGroup;
             }
+
+            if (moveTargetGroup) {
+                const currentTarget = moveTargetGroup.value;
+                moveTargetGroup.innerHTML = '<option value="">Без группы</option>';
+                groups.forEach(group => {
+                    moveTargetGroup.innerHTML += `<option value="${group.id}">${escapeHtml(group.name)}</option>`;
+                });
+                if (currentTarget !== null && currentTarget !== undefined) {
+                    moveTargetGroup.value = currentTarget;
+                }
+            }
+        }
+
+        function toggleGroupFilterMenu() {
+            const menu = document.getElementById('groupFilterMenu');
+            const chevron = document.getElementById('groupFilterChevron');
+            if (!menu) return;
+            if (menu.style.display === 'block') {
+                closeGroupFilterMenu();
+            } else {
+                menu.style.display = 'block';
+                if (chevron) chevron.classList.add('rotated');
+            }
+        }
+
+        function closeGroupFilterMenu() {
+            const menu = document.getElementById('groupFilterMenu');
+            const chevron = document.getElementById('groupFilterChevron');
+            if (menu) menu.style.display = 'none';
+            if (chevron) chevron.classList.remove('rotated');
+        }
+
+        function selectGroupFilter(value, label) {
+            const input = document.getElementById('groupFilter');
+            const groupFilterLabel = document.getElementById('groupFilterLabel');
+            if (input) input.value = String(value);
+            if (groupFilterLabel) groupFilterLabel.textContent = label;
+            closeGroupFilterMenu();
+            renderDevices();
+        }
+
+        function toggleGroupFilterNode(groupId) {
+            if (expandedGroupFilterNodes.has(groupId)) {
+                expandedGroupFilterNodes.delete(groupId);
+            } else {
+                expandedGroupFilterNodes.add(groupId);
+            }
+
+            const children = document.getElementById(`group-filter-children-${groupId}`);
+            const icon = document.getElementById(`group-filter-toggle-${groupId}`);
+            const expanded = expandedGroupFilterNodes.has(groupId);
+
+            if (children) children.style.display = expanded ? 'block' : 'none';
+            if (icon) icon.textContent = expanded ? '−' : '+';
+        }
+
+        function renderGroupFilterTree(container) {
+            if (!container) return;
+
+            const groupMap = new Map();
+            (groups || []).forEach(g => {
+                groupMap.set(g.id, { ...g, children: [] });
+            });
+
+            const roots = [];
+            groupMap.forEach(g => {
+                if (g.parent_id && groupMap.has(g.parent_id)) {
+                    groupMap.get(g.parent_id).children.push(g);
+                } else {
+                    roots.push(g);
+                }
+            });
+
+            const sortByName = (a, b) => (a.name || '').localeCompare(b.name || '');
+            roots.sort(sortByName);
+            groupMap.forEach(g => g.children.sort(sortByName));
+
+            function renderNode(g) {
+                const hasChildren = g.children && g.children.length > 0;
+                const expanded = expandedGroupFilterNodes.has(g.id);
+
+                const node = document.createElement('div');
+                node.style.marginBottom = '4px';
+
+                const header = document.createElement('div');
+                header.className = 'group-filter-node';
+                header.onclick = () => selectGroupFilter(String(g.id), g.name);
+
+                const toggle = document.createElement('button');
+                toggle.type = 'button';
+                toggle.className = 'group-filter-toggle';
+                toggle.id = `group-filter-toggle-${g.id}`;
+                toggle.textContent = expanded ? '−' : '+';
+                toggle.style.visibility = hasChildren ? 'visible' : 'hidden';
+                toggle.onclick = (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (!hasChildren) return;
+                    toggleGroupFilterNode(g.id);
+                };
+
+                const color = document.createElement('span');
+                color.style.width = '10px';
+                color.style.height = '10px';
+                color.style.borderRadius = '999px';
+                color.style.background = g.color || '#95a5a6';
+                color.style.flexShrink = '0';
+
+                const name = document.createElement('span');
+                name.textContent = g.name;
+                name.style.flex = '1';
+                name.style.minWidth = '0';
+
+                header.appendChild(toggle);
+                header.appendChild(color);
+                header.appendChild(name);
+                node.appendChild(header);
+
+                if (hasChildren) {
+                    const children = document.createElement('div');
+                    children.className = 'group-filter-children';
+                    children.id = `group-filter-children-${g.id}`;
+                    children.style.display = expanded ? 'block' : 'none';
+                    g.children.forEach(c => children.appendChild(renderNode(c)));
+                    node.appendChild(children);
+                }
+
+                return node;
+            }
+
+            container.innerHTML = '';
+            roots.forEach(g => container.appendChild(renderNode(g)));
         }
         
         async function showPage(page) {
@@ -1551,17 +1926,173 @@
             document.getElementById('devicesContainer').style.display = 'none';
             document.getElementById('groupsContainer').style.display = 'none';
             document.getElementById('devicesControls').style.display = 'none';
+            document.getElementById('allGroupsContainer').style.display = 'none';
             
             if (page === 'groups') {
                 // Показываем страницу групп
                 document.getElementById('groupsContainer').style.display = 'block';
                 renderGroupsPage();
+            } else if (page === 'all') {
+                document.getElementById('devicesControls').style.display = 'flex';
+                document.getElementById('allGroupsContainer').style.display = 'block';
+                renderAllGroupsPage();
             } else {
                 // Показываем страницу устройств
                 document.getElementById('devicesControls').style.display = 'flex';
                 document.getElementById('devicesContainer').style.display = 'block';
                 renderDevices();
             }
+        }
+
+        function renderAllGroupsPage() {
+            const treeContainer = document.getElementById('allGroupsTree');
+            const emptyState = document.getElementById('allGroupsEmpty');
+            const stats = document.getElementById('allGroupsStats');
+
+            if (!treeContainer || !emptyState || !stats) return;
+
+            if (!groups || groups.length === 0) {
+                treeContainer.innerHTML = '';
+                emptyState.style.display = 'block';
+                stats.textContent = '0';
+                return;
+            }
+
+            emptyState.style.display = 'none';
+
+            const groupMap = new Map();
+            groups.forEach(group => {
+                group.children = [];
+                groupMap.set(group.id, group);
+            });
+            const rootGroups = [];
+            groups.forEach(group => {
+                if (group.parent_id && groupMap.has(group.parent_id)) {
+                    groupMap.get(group.parent_id).children.push(group);
+                } else {
+                    rootGroups.push(group);
+                }
+            });
+
+            const devicesByGroup = new Map();
+            devices.forEach(device => {
+                const gid = device.group_id || 0;
+                if (!devicesByGroup.has(gid)) devicesByGroup.set(gid, []);
+                devicesByGroup.get(gid).push(device);
+            });
+
+            function _renderDeviceRow(device) {
+                const status = device.status || 'offline';
+                const fav = `<button class="favorite-btn ${device.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${device.id}, '${device.type}', ${device.is_favorite ? 'false' : 'true'})"><i class="fas fa-star"></i></button>`;
+                const icon = `<div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 26px; height: 26px;"><i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i></div>`;
+
+                const actions = device.type === 'server'
+                    ? `
+                        <button class="action-btn action-connect" onclick="event.stopPropagation(); connectToServer(${device.id})">
+                            <i class="fas fa-link"></i>
+                            <span>Подключиться</span>
+                        </button>
+                        <button class="action-btn" onclick="event.stopPropagation(); openNoVnc(${device.id})" title="Открыть noVNC в браузере">
+                            <i class="fas fa-desktop"></i>
+                            <span>noVNC</span>
+                        </button>
+                    `
+                    : `
+                        <button class="action-btn action-connect" onclick="event.stopPropagation(); openPrinterInterface('${escapeHtml(device.web_interface || '')}', '${device.ip}')">
+                            <i class="fas fa-external-link-alt"></i>
+                            <span>Веб-интерфейс</span>
+                        </button>
+                    `;
+
+                const editDelete = `
+                    <button class="action-btn" onclick="event.stopPropagation(); editDevice(${device.id}, '${device.type}')">
+                        <i class="fas fa-edit"></i>
+                        <span>Изменить</span>
+                    </button>
+                    <button class="action-btn action-delete" onclick="event.stopPropagation(); deleteDevice(${device.id}, '${device.type}')">
+                        <i class="fas fa-trash"></i>
+                        <span>Удалить</span>
+                    </button>
+                `;
+
+                return `
+                    <div style="display:flex; align-items:center; gap:10px; padding:2px 0;">
+                        ${icon}
+                        <div style="flex:1; min-width:0;">
+                            <div style="display:flex; align-items:center; gap:6px;">
+                                <strong style="font-size:13px;">${escapeHtml(device.name)}</strong>
+                                ${fav}
+                            </div>
+                            <div style="font-size:12px; opacity:0.75;">${escapeHtml(device.ip)}${device.port ? `:${device.port}` : ''}</div>
+                        </div>
+                        <span class="status-badge status-${status}" style="min-width:78px;">
+                            <span class="status-dot"></span>
+                            ${status === 'online' ? 'Онлайн' : 'Офлайн'}
+                        </span>
+                        <div class="device-actions" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
+                            ${actions}
+                            ${editDelete}
+                        </div>
+                    </div>
+                `;
+            }
+
+            function _renderGroupNode(group) {
+                const hasChildren = group.children && group.children.length > 0;
+                const isExpanded = expandedGroups.has(group.id);
+                const groupDevices = devicesByGroup.get(group.id) || [];
+                const ungroupedDevices = group.id === 0 ? (devicesByGroup.get(0) || []) : [];
+
+                const contentHtml = `
+                    <div class="tree-content ${isExpanded ? 'expanded' : ''}" id="all-group-content-${group.id}">
+                        <div style="padding: 4px 0 4px 28px;">
+                            ${(groupDevices.length ? groupDevices.map(_renderDeviceRow).join('') : '')}
+                        </div>
+                        ${(hasChildren ? group.children.map(child => _renderGroupNode(child).outerHTML).join('') : '')}
+                    </div>
+                `;
+
+                const node = document.createElement('div');
+                node.className = 'tree-item';
+                node.innerHTML = `
+                    <div class="tree-header" onclick="toggleAllGroup(${group.id})">
+                        ${hasChildren || groupDevices.length ? `
+                            <div class="tree-toggle ${isExpanded ? 'rotated' : ''}">
+                                <i class="fas fa-chevron-right"></i>
+                            </div>
+                        ` : '<div class="tree-toggle" style="visibility: hidden;"><i class="fas fa-chevron-right"></i></div>'}
+
+                        <div class="tree-color" style="background: ${group.color}"></div>
+                        <div class="tree-name">${escapeHtml(group.name)}</div>
+                        <div class="tree-stats">${groupDevices.length} устройств</div>
+                    </div>
+                    ${contentHtml}
+                `;
+                return node;
+            }
+
+            treeContainer.innerHTML = '';
+            rootGroups.forEach(group => treeContainer.appendChild(_renderGroupNode(group)));
+
+            const ungrouped = devicesByGroup.get(0) || [];
+            if (ungrouped.length) {
+                const pseudo = { id: 0, name: 'Без группы', color: '#95a5a6', children: [], parent_id: null };
+                treeContainer.appendChild(_renderGroupNode(pseudo));
+            }
+
+            stats.textContent = `${groups.length} групп`;
+        }
+
+        function toggleAllGroup(groupId) {
+            if (expandedGroups.has(groupId)) {
+                expandedGroups.delete(groupId);
+            } else {
+                expandedGroups.add(groupId);
+            }
+            const content = document.getElementById(`all-group-content-${groupId}`);
+            const toggle = document.querySelector(`.tree-header[onclick="toggleAllGroup(${groupId})"] .tree-toggle`);
+            if (content) content.classList.toggle('expanded');
+            if (toggle) toggle.classList.toggle('rotated');
         }
         
         function renderDevices() {
@@ -1594,7 +2125,11 @@
                 
                 // Фильтр по группе
                 if (groupFilter !== 'all') {
-                    if (device.group_id !== parseInt(groupFilter)) return false;
+                    if (groupFilter === 'ungrouped') {
+                        if (device.group_id) return false;
+                    } else {
+                        if (device.group_id !== parseInt(groupFilter)) return false;
+                    }
                 }
                 
                 return true;
@@ -1686,6 +2221,12 @@
                 const group = groups.find(g => g.id === device.group_id);
                 const status = device.status || 'offline';
                 
+                const favoriteBtn = `
+                    <button class="favorite-btn ${device.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${device.id}, '${device.type}', ${device.is_favorite ? 'false' : 'true'})" title="${device.is_favorite ? 'Убрать из избранного' : 'Добавить в избранное'}">
+                        <i class="fas fa-star"></i>
+                    </button>
+                `;
+
                 return `
                     <tr>
                         <td style="text-align: center;">
@@ -1695,8 +2236,7 @@
                         </td>
                         <td>
                             <strong>${escapeHtml(device.name)}</strong>
-                            ${device.type === 'server' && device.is_favorite ?
-                                '<button class="favorite-btn active"><i class="fas fa-star"></i></button>' : ''}
+                            ${favoriteBtn}
                         </td>
                         <td>
                             <div style="font-weight: 500;">${device.ip}</div>
@@ -1750,6 +2290,93 @@
                 `;
             }).join('');
         }
+
+        async function toggleFavorite(id, type, isFavorite) {
+            try {
+                const response = await fetch(`/api/favorites/${type}/${id}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_favorite: isFavorite })
+                });
+
+                const data = await safeJson(response);
+                if (!response.ok) {
+                    if (response.status === 405) {
+                        throw new Error(`405 Method Not Allowed: POST /api/favorites/${type}/${id}`);
+                    }
+                    throw new Error(data.error || 'Ошибка обновления избранного');
+                }
+
+                // Обновляем локальные данные
+                const device = devices.find(d => d.id === id && d.type === type);
+                if (device) {
+                    device.is_favorite = !!data.is_favorite;
+                }
+
+                // Перерисовываем в зависимости от текущей страницы
+                if (currentPage === 'all') {
+                    renderAllGroupsPage();
+                } else if (currentPage === 'groups') {
+                    renderGroupsPage();
+                } else {
+                    renderDevices();
+                }
+            } catch (error) {
+                console.error('Ошибка избранного:', error);
+                showNotification(error?.message ? `Ошибка избранного: ${error.message}` : 'Ошибка избранного', 'error');
+            }
+        }
+
+        async function safeJson(response) {
+            const contentType = response.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+                return await response.json();
+            }
+            const text = await response.text();
+            // Частый случай: сервер вернул HTML (<!doctype ...>) вместо JSON
+            return { error: text.slice(0, 300) };
+        }
+
+        function showClearDbModal() {
+            document.getElementById('clearDbStep1').style.display = 'block';
+            document.getElementById('clearDbStep2').style.display = 'none';
+            document.getElementById('clearDbNextBtn').style.display = 'inline-flex';
+            document.getElementById('clearDbConfirmBtn').style.display = 'none';
+            document.getElementById('clearDbModal').classList.add('active');
+        }
+
+        function clearDbNext() {
+            document.getElementById('clearDbStep1').style.display = 'none';
+            document.getElementById('clearDbStep2').style.display = 'block';
+            document.getElementById('clearDbNextBtn').style.display = 'none';
+            document.getElementById('clearDbConfirmBtn').style.display = 'inline-flex';
+        }
+
+        async function clearDbConfirm() {
+            try {
+                const response = await fetch('/api/admin/clear_db', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ confirm: 'CLEAR', confirm2: 'CLEAR', ..._clearDbOptions })
+                });
+
+                const data = await safeJson(response);
+                if (!response.ok) {
+                    if (response.status === 405) {
+                        throw new Error('405 Method Not Allowed: POST /api/admin/clear_db');
+                    }
+                    throw new Error(data.error || 'Ошибка очистки базы');
+                }
+
+                closeModal();
+                showNotification('База очищена', 'success');
+                await loadData();
+                showPage('favorites');
+            } catch (error) {
+                console.error('Ошибка очистки БД:', error);
+                showNotification(error?.message ? `Ошибка очистки базы: ${error.message}` : 'Ошибка очистки базы', 'error');
+            }
+        }
         
         function filterDevices() {
             renderDevices();
@@ -1799,9 +2426,13 @@
             const hasChildren = group.children && group.children.length > 0;
             const isExpanded = expandedGroups.has(group.id);
             
+            const groupDevices = devices.filter(d => d.group_id === group.id);
+
+            const hasContent = hasChildren || groupDevices.length > 0;
+            
             node.innerHTML = `
                 <div class="tree-header" onclick="toggleGroup(${group.id})">
-                    ${hasChildren ? `
+                    ${hasContent ? `
                         <div class="tree-toggle ${isExpanded ? 'rotated' : ''}">
                             <i class="fas fa-chevron-right"></i>
                         </div>
@@ -1813,6 +2444,12 @@
                         ${group.servers_count || 0} серверов, ${group.printers_count || 0} принтеров
                     </div>
                     <div class="tree-actions">
+                        <button class="action-btn" onclick="event.stopPropagation(); showAddSubgroupModal(${group.id})" title="Добавить подгруппу">
+                            <i class="fas fa-folder-plus"></i>
+                        </button>
+                        <button class="action-btn" onclick="event.stopPropagation(); moveGroup(${group.id})" title="Переместить группу">
+                            <i class="fas fa-arrows-alt"></i>
+                        </button>
                         <button class="action-btn" onclick="event.stopPropagation(); editGroup(${group.id})">
                             <i class="fas fa-edit"></i>
                         </button>
@@ -1821,14 +2458,128 @@
                         </button>
                     </div>
                 </div>
-                ${hasChildren ? `
+                ${hasContent ? `
                     <div class="tree-content ${isExpanded ? 'expanded' : ''}" id="group-content-${group.id}">
-                        ${group.children.map(child => renderGroupNode(child).outerHTML).join('')}
+                        <div style="padding: 6px 0 6px 34px;">
+                            ${groupDevices.map(d => `
+                                <div style="display:flex; align-items:center; gap:10px; padding:2px 0;">
+                                    <div class="type-icon ${d.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 24px; height: 24px;">
+                                        <i class="fas ${d.type === 'server' ? 'fa-server' : 'fa-print'}"></i>
+                                    </div>
+                                    <div style="flex:1; min-width:0;">
+                                        <div style="display:flex; align-items:center; gap:6px;">
+                                            <span style="font-weight:600; font-size:13px;">${escapeHtml(d.name)}</span>
+                                            <button class="favorite-btn ${d.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${d.id}, '${d.type}', ${d.is_favorite ? 'false' : 'true'})"><i class="fas fa-star"></i></button>
+                                        </div>
+                                        <div style="font-size:12px; opacity:0.75;">${escapeHtml(d.ip)}${d.port ? `:${d.port}` : ''}</div>
+                                    </div>
+                                    <div class="device-actions" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
+                                        <button class="action-btn" onclick="event.stopPropagation(); showMoveDeviceModal(${d.id}, '${d.type}', ${group.id})">
+                                            <i class="fas fa-arrows-alt"></i>
+                                            <span>Переместить</span>
+                                        </button>
+                                        <button class="action-btn" onclick="event.stopPropagation(); editDevice(${d.id}, '${d.type}')">
+                                            <i class="fas fa-edit"></i>
+                                            <span>Изменить</span>
+                                        </button>
+                                        <button class="action-btn action-delete" onclick="event.stopPropagation(); deleteDevice(${d.id}, '${d.type}')">
+                                            <i class="fas fa-trash"></i>
+                                            <span>Удалить</span>
+                                        </button>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                        ${(hasChildren ? group.children.map(child => renderGroupNode(child).outerHTML).join('') : '')}
                     </div>
                 ` : ''}
             `;
             
             return node;
+        }
+
+        function showAddSubgroupModal(parentGroupId) {
+            editingGroupId = null;
+            const modal = document.getElementById('groupModal');
+            modal.classList.add('active');
+
+            document.querySelector('#groupModal .modal-title').textContent = 'Добавить группу';
+            document.getElementById('groupId').value = '';
+            document.getElementById('groupName').value = '';
+            document.getElementById('groupColor').value = '#3498db';
+            document.getElementById('colorPreview').style.backgroundColor = '#3498db';
+
+            const parentGroup = document.getElementById('parentGroup');
+            if (parentGroup) {
+                parentGroup.value = String(parentGroupId);
+            }
+        }
+
+        function moveGroup(groupId) {
+            editGroup(groupId);
+            const parentGroup = document.getElementById('parentGroup');
+            if (parentGroup) parentGroup.focus();
+        }
+
+        function showMoveDeviceModal(deviceId, type, currentGroupId) {
+            moveContext = { deviceId, type, currentGroupId };
+            const modal = document.getElementById('moveModal');
+            const title = modal.querySelector('.modal-title');
+            if (title) title.textContent = 'Переместить устройство';
+
+            const select = document.getElementById('moveTargetGroup');
+            if (select) {
+                // Группы уже заполнены в updateGroupFilters(), но на всякий случай обновим
+                updateGroupFilters();
+                select.value = currentGroupId ? String(currentGroupId) : '';
+            }
+
+            modal.classList.add('active');
+        }
+
+        async function confirmMove() {
+            if (!moveContext) {
+                closeModal();
+                return;
+            }
+
+            const select = document.getElementById('moveTargetGroup');
+            const value = select ? select.value : '';
+            const groupId = value ? parseInt(value) : null;
+
+            const { deviceId, type } = moveContext;
+            const url = type === 'server' ? `/api/servers/${deviceId}` : `/api/printers/${deviceId}`;
+
+            try {
+                const response = await fetch(url, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ group_id: groupId })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Ошибка перемещения');
+                }
+
+                // Обновляем локальные данные
+                const d = devices.find(x => x.id === deviceId && x.type === type);
+                if (d) d.group_id = groupId;
+
+                closeModal();
+                showNotification('Перемещено', 'success');
+
+                if (currentPage === 'groups') {
+                    renderGroupsPage();
+                } else if (currentPage === 'all') {
+                    renderAllGroupsPage();
+                } else {
+                    renderDevices();
+                }
+            } catch (e) {
+                console.error('Ошибка перемещения:', e);
+                showNotification('Ошибка перемещения', 'error');
+            }
         }
         
         function toggleGroup(groupId) {
@@ -2132,6 +2883,21 @@
             }
             
             window.open(url, '_blank');
+        }
+
+        function showSettingsModal() {
+            const modal = document.getElementById('settingsModal');
+            modal.classList.add('active');
+        }
+
+        function openSelectiveClearModal() {
+            _clearDbOptions = {
+                clear_servers: document.getElementById('clearDbServers')?.checked !== false,
+                clear_printers: document.getElementById('clearDbPrinters')?.checked !== false,
+                clear_groups: document.getElementById('clearDbGroups')?.checked !== false
+            };
+            closeModal();
+            showClearDbModal();
         }
         
         function editDevice(id, type) {

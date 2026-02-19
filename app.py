@@ -7,13 +7,67 @@ import threading
 import time
 from datetime import datetime
 import platform
+from pathlib import Path
 from models import db, Group, Server, Printer
+from sqlalchemy import text
 
 app = Flask(__name__, static_folder='.', static_url_path='')
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///vnc_manager.db'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
+
+APP_BUILD_ID = f"{int(time.time())}:{Path(__file__).name}"
+
+
+@app.route('/api/debug/routes', methods=['GET'])
+def debug_routes():
+    routes = []
+    for rule in app.url_map.iter_rules():
+        if rule.rule in (
+            '/api/favorites/<string:device_type>/<int:device_id>',
+            '/api/admin/clear_db',
+            '/api/<path:any_path>',
+        ):
+            routes.append({'rule': rule.rule, 'methods': sorted(list(rule.methods or []))})
+    return jsonify({'build_id': APP_BUILD_ID, 'routes': routes})
+
+
+@app.after_request
+def add_api_cors_headers(response):
+    if request.path.startswith('/api/'):
+        response.headers.setdefault('Access-Control-Allow-Origin', '*')
+        response.headers.setdefault('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.setdefault('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
+    return response
+
+
+@app.route('/api/<path:any_path>', methods=['OPTIONS'])
+def api_options(any_path):
+    return ('', 204)
+
+
+@app.before_request
+def _log_problem_endpoints():
+    if request.path.startswith('/api/favorites/') or request.path == '/api/admin/clear_db':
+        try:
+            app.logger.info('API request: %s %s', request.method, request.path)
+        except Exception:
+            pass
+
+
+@app.errorhandler(404)
+def handle_404(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Not Found', 'path': request.path}), 404
+    return e
+
+
+@app.errorhandler(405)
+def handle_405(e):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Method Not Allowed', 'path': request.path}), 405
+    return e
 
 # --- noVNC / websockify ---
 NOVNC_PROXY_PORT = int(os.environ.get("NOVNC_PROXY_PORT", "6080"))
@@ -53,6 +107,24 @@ def init_db():
     """Инициализация базы данных с тестовыми данными"""
     with app.app_context():
         db.create_all()
+
+        # Миграция: добавляем колонку is_favorite в таблицу printer, если её нет (для существующих БД)
+        try:
+            cols = [r[1] for r in db.session.execute(text("PRAGMA table_info(printer)"))]
+            if 'is_favorite' not in cols:
+                db.session.execute(text("ALTER TABLE printer ADD COLUMN is_favorite BOOLEAN DEFAULT 0"))
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+        # Миграция: добавляем колонку is_favorite в таблицу server, если её нет (для существующих БД)
+        try:
+            cols = [r[1] for r in db.session.execute(text("PRAGMA table_info(server)"))]
+            if 'is_favorite' not in cols:
+                db.session.execute(text("ALTER TABLE server ADD COLUMN is_favorite BOOLEAN DEFAULT 0"))
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
         
         # Создаем тестовые группы если их нет
         if Group.query.count() == 0:
@@ -360,6 +432,7 @@ def printers_api():
                 'ip': printer.ip,
                 'group_id': printer.group_id,
                 'web_interface': printer.web_interface,
+                'is_favorite': bool(getattr(printer, 'is_favorite', False)),
                 'status': 'online' if is_online else 'offline',
                 'comment': printer.comment,
                 'created_at': printer.created_at.isoformat() if printer.created_at else None
@@ -385,7 +458,8 @@ def printers_api():
             ip=data['ip'],
             group_id=data.get('group_id'),
             web_interface=data.get('web_interface', f"http://{data['ip']}"),
-            comment=data.get('comment', '')
+            comment=data.get('comment', ''),
+            is_favorite=bool(data.get('is_favorite', False))
         )
         
         db.session.add(printer)
@@ -416,6 +490,8 @@ def printer_api(printer_id):
             printer.web_interface = data['web_interface']
         if 'comment' in data:
             printer.comment = data['comment']
+        if 'is_favorite' in data:
+            printer.is_favorite = bool(data['is_favorite'])
         
         db.session.commit()
         return jsonify({'success': True})
@@ -468,6 +544,64 @@ def connect_vnc(server_id):
             'message': f'Ошибка при запуске VNC клиента: {str(e)}',
             'manual_connection': f"Вы можете подключиться вручную: {server.ip}:{server.port}"
         })
+
+
+@app.route('/api/favorites/<string:device_type>/<int:device_id>', methods=['PUT', 'POST'])
+def toggle_favorite(device_type, device_id):
+    """Установка/переключение избранного для серверов и принтеров"""
+    data = request.json or {}
+
+    if device_type == 'server':
+        device = Server.query.get(device_id)
+    elif device_type == 'printer':
+        device = Printer.query.get(device_id)
+    else:
+        return jsonify({'error': 'Неверный тип устройства'}), 400
+
+    if not device:
+        return jsonify({'error': 'Устройство не найдено'}), 404
+
+    if 'is_favorite' in data:
+        device.is_favorite = bool(data['is_favorite'])
+    else:
+        device.is_favorite = not bool(getattr(device, 'is_favorite', False))
+
+    db.session.commit()
+    return jsonify({'success': True, 'id': device_id, 'type': device_type, 'is_favorite': bool(device.is_favorite)})
+
+
+@app.route('/api/admin/clear_db', methods=['POST', 'PUT'])
+def clear_db():
+    """Очистка данных из БД (таблицы остаются)"""
+    data = request.json or {}
+    if data.get('confirm') != 'CLEAR' or data.get('confirm2') != 'CLEAR':
+        return jsonify({'error': 'Требуется подтверждение'}), 400
+
+    try:
+        clear_servers = bool(data.get('clear_servers', True))
+        clear_printers = bool(data.get('clear_printers', True))
+        clear_groups = bool(data.get('clear_groups', True))
+
+        if clear_groups:
+            # Если удаляем группы, сначала отвязываем устройства, чтобы не было проблем с FK.
+            Server.query.update({'group_id': None}, synchronize_session=False)
+            Printer.query.update({'group_id': None}, synchronize_session=False)
+
+        if clear_servers:
+            Server.query.delete(synchronize_session=False)
+        if clear_printers:
+            Printer.query.delete(synchronize_session=False)
+        if clear_groups:
+            # У групп есть иерархия (parent_id). Перед удалением разрываем связи,
+            # иначе SQLite может ругаться на FK при массовом delete.
+            Group.query.update({'parent_id': None}, synchronize_session=False)
+            Group.query.delete(synchronize_session=False)
+
+        db.session.commit()
+        return jsonify({'success': True})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'{type(e).__name__}: {str(e)}'}), 500
 
 
 @app.route('/api/novnc/<int:server_id>/token', methods=['POST'])

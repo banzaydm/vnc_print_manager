@@ -35,6 +35,7 @@ class Printer(db.Model):
     ip = db.Column(db.String(15), unique=True, nullable=False)
     group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True)
     web_interface = db.Column(db.String(500), default='')
+    is_favorite = db.Column(db.Boolean, default=False)
     status = db.Column(db.Boolean, default=False)
     comment = db.Column(db.Text, default='')
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
