@@ -7,8 +7,8 @@ services:
     ports:
       - "5000:5000"  # Веб-интерфейс
     volumes:
-      - ./instance:/app/instance  # Сохранение базы данных и логов
-      - ./vnc_manager.db:/app/vnc_manager.db  # База данных SQLite
+      - vnc_manager_data:/app/instance  # Сохранение базы данных и логов
+      - vnc_manager_db:/app/vnc_manager.db  # База данных SQLite
     environment:
       - FLASK_APP=app.py
       - FLASK_ENV=production
@@ -33,7 +33,7 @@ services:
     ports:
       - "6080:6080"  # noVNC WebSocket прокси
     volumes:
-      - ./instance:/app/instance  # Общий TokenFile и логи websockify
+      - vnc_manager_data:/app/instance  # Общий TokenFile и логи websockify
     environment:
       - NOVNC_PROXY_PORT=6080
     command: ["python", "-m", "websockify", "--token-plugin", "TokenFile", "--token-source", "/app/instance/novnc_tokens.txt", "--verbose", "6080"]
@@ -53,8 +53,11 @@ services:
   #     - postgres_data:/var/lib/postgresql/data
   #   restart: unless-stopped
 
-# volumes:
-#   postgres_data:
+volumes:
+  vnc_manager_data:
+    driver: local
+  vnc_manager_db:
+    driver: local
 
 networks:
   vnc_net:
