@@ -825,6 +825,10 @@ def scan_network():
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
             app.logger.debug(f'Ping {ip}: returncode={result.returncode}, stdout={result.stdout[:100]}')
             return result.returncode == 0
+        except FileNotFoundError:
+            # Если ping недоступен (например в Docker без ping), пропускаем проверку
+            app.logger.warning(f'Ping недоступен, пропускаем проверку для {ip}')
+            return True  # Считаем что хост доступен, переходим к проверке портов
         except Exception as e:
             app.logger.error(f'Ошибка ping для {ip}: {e}')
             return False
