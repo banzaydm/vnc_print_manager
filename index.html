@@ -705,6 +705,11 @@
             box-shadow: 0 0 0 3px rgba(74, 108, 247, 0.1);
         }
         
+        .form-input.scan-input {
+            width: 180px;
+            padding: 8px 12px;
+        }
+        
         .form-textarea {
             min-height: 80px;
             resize: vertical;
@@ -1097,6 +1102,10 @@
                         <i class="fas fa-tags"></i>
                         <span>Группы</span>
                     </button>
+                    <button class="nav-tab" data-page="scan">
+                        <i class="fas fa-network-wired"></i>
+                        <span>Сканирование</span>
+                    </button>
                 </div>
             </div>
             
@@ -1254,6 +1263,44 @@
                             <i class="fas fa-plus"></i>
                             <span>Добавить группу</span>
                         </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Контейнер для страницы сканирования сети -->
+            <div id="scanContainer" style="display: none;">
+                <div class="table-container">
+                    <div class="table-header">
+                        <h2>Сканирование сети</h2>
+                        <div style="display: flex; gap: 12px; align-items: center;">
+                            <input type="text" id="scanRange" placeholder="192.168.1.0/24" class="form-input scan-input">
+                            <button class="btn" id="startScanBtn">
+                                <i class="fas fa-search"></i>
+                                <span>Начать сканирование</span>
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div id="scanProgress" style="display: none; margin: 20px 0;">
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <div style="flex: 1; height: 8px; background: var(--card-border); border-radius: 4px; overflow: hidden;">
+                                <div id="scanProgressBar" style="height: 100%; background: var(--primary); width: 0%; transition: width 0.3s;"></div>
+                            </div>
+                            <span id="scanProgressText" style="font-size: 12px; color: var(--text-secondary);">0%</span>
+                        </div>
+                        <div style="margin-top: 8px; font-size: 12px; color: var(--text-secondary);">
+                            <span id="scanStatusText">Подготовка...</span>
+                        </div>
+                    </div>
+
+                    <div id="scanResults" style="margin-top: 20px;">
+                        <div id="scanEmpty" style="text-align: center; padding: 40px; color: var(--text-secondary);">
+                            <i class="fas fa-network-wired" style="font-size: 48px; margin-bottom: 16px; opacity: 0.3;"></i>
+                            <p>Нажмите "Начать сканирование" для поиска VNC серверов и принтеров в сети</p>
+                        </div>
+                        <div id="scanList" style="display: none;">
+                            <!-- Результаты сканирования будут здесь -->
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1927,6 +1974,7 @@
             document.getElementById('groupsContainer').style.display = 'none';
             document.getElementById('devicesControls').style.display = 'none';
             document.getElementById('allGroupsContainer').style.display = 'none';
+            document.getElementById('scanContainer').style.display = 'none';
             
             if (page === 'groups') {
                 // Показываем страницу групп
@@ -1936,11 +1984,266 @@
                 document.getElementById('devicesControls').style.display = 'flex';
                 document.getElementById('allGroupsContainer').style.display = 'block';
                 renderAllGroupsPage();
+            } else if (page === 'scan') {
+                // Показываем страницу сканирования
+                document.getElementById('scanContainer').style.display = 'block';
+                initScanPage();
             } else {
                 // Показываем страницу устройств
                 document.getElementById('devicesControls').style.display = 'flex';
                 document.getElementById('devicesContainer').style.display = 'block';
                 renderDevices();
+            }
+        }
+
+        // Функции для страницы сканирования сети
+        let scanResults = [];
+
+        function initScanPage() {
+            // Определяем текущую подсеть автоматически
+            const currentIP = window.location.hostname;
+            if (currentIP && currentIP !== 'localhost' && currentIP !== '127.0.0.1') {
+                const parts = currentIP.split('.');
+                if (parts.length === 4) {
+                    const subnet = `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+                    document.getElementById('scanRange').value = subnet;
+                }
+            }
+            
+            // Привязываем обработчики
+            const startBtn = document.getElementById('startScanBtn');
+            if (startBtn) {
+                startBtn.onclick = startNetworkScan;
+            }
+        }
+
+        async function startNetworkScan() {
+            const range = document.getElementById('scanRange').value.trim();
+            if (!range) {
+                showNotification('Укажите диапазон для сканирования', 'error');
+                return;
+            }
+
+            const progressDiv = document.getElementById('scanProgress');
+            const progressBar = document.getElementById('scanProgressBar');
+            const progressText = document.getElementById('scanProgressText');
+            const statusText = document.getElementById('scanStatusText');
+            const resultsDiv = document.getElementById('scanResults');
+            const emptyDiv = document.getElementById('scanEmpty');
+            const listDiv = document.getElementById('scanList');
+            const startBtn = document.getElementById('startScanBtn');
+
+            // Показываем прогресс
+            progressDiv.style.display = 'block';
+            progressBar.style.width = '0%';
+            progressText.textContent = '0%';
+            statusText.textContent = 'Подготовка к сканированию...';
+            resultsDiv.style.display = 'block';
+            emptyDiv.style.display = 'none';
+            listDiv.style.display = 'none';
+            startBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/scan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ range: range })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Ошибка сканирования');
+                }
+
+                // Имитируем прогресс (в реальном приложении здесь будет WebSocket или Server-Sent Events)
+                let progress = 0;
+                const progressInterval = setInterval(() => {
+                    progress += 5;
+                    if (progress > 90) progress = 90;
+                    progressBar.style.width = progress + '%';
+                    progressText.textContent = progress + '%';
+                    statusText.textContent = `Сканирование... ${progress}%`;
+                }, 200);
+
+                // Ждем завершения сканирования
+                await new Promise(resolve => setTimeout(resolve, 3000));
+
+                clearInterval(progressInterval);
+                progressBar.style.width = '100%';
+                progressText.textContent = '100%';
+                statusText.textContent = 'Сканирование завершено';
+
+                scanResults = data.results || [];
+                displayScanResults();
+
+            } catch (error) {
+                console.error('Ошибка сканирования:', error);
+                showNotification(error?.message || 'Ошибка сканирования сети', 'error');
+                progressDiv.style.display = 'none';
+            } finally {
+                startBtn.disabled = false;
+            }
+        }
+
+        function displayScanResults() {
+            const emptyDiv = document.getElementById('scanEmpty');
+            const listDiv = document.getElementById('scanList');
+
+            if (scanResults.length === 0) {
+                emptyDiv.style.display = 'block';
+                listDiv.style.display = 'none';
+                emptyDiv.innerHTML = `
+                    <i class="fas fa-search" style="font-size: 48px; margin-bottom: 16px; opacity: 0.3;"></i>
+                    <p>Устройства не найдены</p>
+                `;
+                return;
+            }
+
+            emptyDiv.style.display = 'none';
+            listDiv.style.display = 'block';
+
+            const serversHtml = scanResults
+                .filter(r => r.type === 'server')
+                .map(device => renderScanDevice(device))
+                .join('');
+
+            const printersHtml = scanResults
+                .filter(r => r.type === 'printer')
+                .map(device => renderScanDevice(device))
+                .join('');
+
+            listDiv.innerHTML = `
+                ${serversHtml ? `
+                    <div style="margin-bottom: 24px;">
+                        <h3 style="margin-bottom: 12px; color: var(--text-color);">
+                            <i class="fas fa-server"></i> Найденные VNC серверы (${scanResults.filter(r => r.type === 'server').length})
+                        </h3>
+                        <div style="display: grid; gap: 12px;">
+                            ${serversHtml}
+                        </div>
+                    </div>
+                ` : ''}
+                ${printersHtml ? `
+                    <div>
+                        <h3 style="margin-bottom: 12px; color: var(--text-color);">
+                            <i class="fas fa-print"></i> Найденные принтеры (${scanResults.filter(r => r.type === 'printer').length})
+                        </h3>
+                        <div style="display: grid; gap: 12px;">
+                            ${printersHtml}
+                        </div>
+                    </div>
+                ` : ''}
+            `;
+        }
+
+        function renderScanDevice(device) {
+            const exists = devices.some(d => d.ip === device.ip && d.type === device.type);
+            const statusClass = device.status === 'online' ? 'status-online' : 'status-offline';
+            const statusText = device.status === 'online' ? 'Онлайн' : 'Офлайн';
+
+            return `
+                <div class="card" style="padding: 16px; display: flex; align-items: center; gap: 16px;">
+                    <div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}">
+                        <i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i>
+                    </div>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-weight: 600; margin-bottom: 4px;">
+                            ${device.name || `${device.type}-${device.ip}`}
+                            ${exists ? '<span style="font-size: 12px; color: var(--success); margin-left: 8px;">(уже добавлен)</span>' : ''}
+                        </div>
+                        <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 4px;">
+                            ${device.ip}${device.port ? `:${device.port}` : ''}
+                        </div>
+                        <div style="font-size: 12px;">
+                            <span class="status-badge ${statusClass}">
+                                <span class="status-dot"></span>
+                                ${statusText}
+                            </span>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 8px;">
+                        ${!exists ? `
+                            <button class="btn" onclick="openAddDeviceModalFromScan('${device.type}', ${JSON.stringify(device).replace(/"/g, '&quot;')})">
+                                <i class="fas fa-plus"></i>
+                                <span>Добавить</span>
+                            </button>
+                        ` : `
+                            <button class="btn" disabled>
+                                <i class="fas fa-check"></i>
+                                <span>Добавлено</span>
+                            </button>
+                        `}
+                    </div>
+                </div>
+            `;
+        }
+
+        function openAddDeviceModalFromScan(type, deviceData) {
+            console.log('openAddDeviceModalFromScan called with:', type, deviceData);
+            // Открываем модальное окно добавления устройства с предзаполненными данными
+            editingDeviceId = null;
+            editingDeviceType = type;
+            
+            const modal = document.getElementById('deviceModal');
+            const title = document.querySelector('#deviceModal .modal-title');
+            const nameInput = document.getElementById('deviceName');
+            const commentInput = document.getElementById('deviceComment');
+            const groupSelect = document.getElementById('deviceGroup');
+            const deviceTypeSelect = document.getElementById('deviceType');
+            
+            // Устанавливаем заголовок
+            title.textContent = type === 'server' ? 'Добавить VNC сервер' : 'Добавить принтер';
+            
+            // Устанавливаем тип устройства
+            deviceTypeSelect.value = type;
+            deviceTypeSelect.dispatchEvent(new Event('change'));
+            
+            // Заполняем общие поля
+            nameInput.value = deviceData.name || `${type}-${deviceData.ip}`;
+            commentInput.value = 'Найдено автоматически в сети';
+            groupSelect.value = '';
+            
+            // Заполняем поля в зависимости от типа
+            if (type === 'server') {
+                document.getElementById('serverIp').value = deviceData.ip;
+                document.getElementById('serverPort').value = deviceData.port || 5900;
+            } else {
+                document.getElementById('printerIp').value = deviceData.ip;
+                document.getElementById('printerInterface').value = deviceData.web_interface || `http://${deviceData.ip}`;
+            }
+            
+            // Показываем модальное окно
+            modal.classList.add('active');
+        }
+
+        async function addScannedDevice(type, deviceData) {
+            try {
+                const payload = {
+                    name: deviceData.name || `${type}-${deviceData.ip}`,
+                    ip: deviceData.ip,
+                    port: deviceData.port || (type === 'server' ? 5900 : 80),
+                    comment: `Найдено автоматически в сети`,
+                    group_id: null
+                };
+
+                const endpoint = type === 'server' ? '/api/servers' : '/api/printers';
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Ошибка добавления устройства');
+                }
+
+                showNotification('Устройство добавлено', 'success');
+                await loadData();
+                displayScanResults(); // Обновляем отображение результатов сканирования
+            } catch (error) {
+                console.error('Ошибка добавления устройства:', error);
+                showNotification(error?.message || 'Ошибка добавления устройства', 'error');
             }
         }
 

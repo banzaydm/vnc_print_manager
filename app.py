@@ -8,6 +8,8 @@ import time
 from datetime import datetime
 import platform
 from pathlib import Path
+import ipaddress
+import concurrent.futures
 from models import db, Group, Server, Printer
 from sqlalchemy import text
 
@@ -544,6 +546,365 @@ def connect_vnc(server_id):
             'message': f'Ошибка при запуске VNC клиента: {str(e)}',
             'manual_connection': f"Вы можете подключиться вручную: {server.ip}:{server.port}"
         })
+
+
+@app.route('/api/scan', methods=['POST'])
+def scan_network():
+    """Сканирование сети для поиска VNC серверов и принтеров"""
+    data = request.json or {}
+    range_input = data.get('range', '').strip()
+    
+    if not range_input:
+        return jsonify({'error': 'Укажите диапазон для сканирования'}), 400
+    
+    try:
+        # Парсим диапазон (поддержка CIDR и простых IP)
+        if '/' in range_input:
+            network = ipaddress.ip_network(range_input, strict=False)
+            ips = [str(ip) for ip in network.hosts()]
+        else:
+            # Одиночный IP
+            ip = ipaddress.ip_address(range_input)
+            ips = [str(ip)]
+    except ValueError as e:
+        return jsonify({'error': f'Неверный формат диапазона: {str(e)}'}), 400
+    
+    # Ограничиваем количество IP для безопасности
+    if len(ips) > 254:
+        return jsonify({'error': 'Слишком большой диапазон (максимум 254 адреса)'}), 400
+    
+    # Логируем для отладки
+    app.logger.info(f'Сканирование диапазона {range_input}: {len(ips)} IP адресов')
+    if ips:
+        app.logger.info(f'Первый IP: {ips[0]}, Последний IP: {ips[-1]}')
+    
+    results = []
+    
+    def get_printer_info(ip, port):
+        """Получить подробную информацию о принтере"""
+        try:
+            import urllib.request
+            import urllib.error
+            import re
+            import json
+            
+            info = {
+                'model': None,
+                'serial': None,
+                'status': None,
+                'toner_level': None,
+                'ink_level': None,
+                'page_count': None,
+                'manufacturer': None
+            }
+            
+            # Пробуем получить информацию с веб-интерфейса
+            url = f'http{"s" if port == 443 else ""}://{ip}:{port}'
+            
+            # Попытка получить основную страницу
+            try:
+                req = urllib.request.Request(url, method='GET')
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    content = response.read(10000).decode('utf-8', errors='ignore')
+                    
+                    # Поиск модели в содержимом
+                    model_patterns = [
+                        r'<title[^>]*>([^<]+)</title>',
+                        r'Model[:\s]+([^\n<]+)',
+                        r'Printer[:\s]+([^\n<]+)',
+                        r'(HP|Canon|Epson|Brother|Xerox|Lexmark|Samsung|Kyocera|Ricoh|Panasonic|Sharp|Toshiba|Konica|Minolta|OKI|Dell|Fuji|Zebra|Dymo)[\s-]+([A-Z0-9\-]+)'
+                    ]
+                    
+                    for pattern in model_patterns:
+                        match = re.search(pattern, content, re.IGNORECASE)
+                        if match:
+                            model = match.group(1).strip()
+                            if len(model) > 3:  # Исключаем короткие совпадения
+                                info['model'] = model
+                                break
+                    
+                    # Определение производителя
+                    manufacturer_patterns = {
+                        'hp': 'HP', 'canon': 'Canon', 'epson': 'Epson',
+                        'brother': 'Brother', 'xerox': 'Xerox', 'lexmark': 'Lexmark',
+                        'samsung': 'Samsung', 'kyocera': 'Kyocera', 'ricoh': 'Ricoh',
+                        'panasonic': 'Panasonic', 'sharp': 'Sharp', 'toshiba': 'Toshiba',
+                        'konica': 'Konica', 'minolta': 'Minolta', 'oki': 'OKI',
+                        'dell': 'Dell', 'fuji': 'Fuji', 'zebra': 'Zebra', 'dymo': 'Dymo'
+                    }
+                    
+                    content_lower = content.lower()
+                    for key, manufacturer in manufacturer_patterns.items():
+                        if key in content_lower:
+                            info['manufacturer'] = manufacturer
+                            break
+                    
+                    # Поиск серийного номера
+                    serial_patterns = [
+                        r'Serial[:\s]+([A-Z0-9\-]+)',
+                        r'S/N[:\s]+([A-Z0-9\-]+)',
+                        r'SerialNumber["\']:\s*["\']([^"\']+)["\']',
+                        r'SN["\']:\s*["\']([^"\']+)["\']'
+                    ]
+                    
+                    for pattern in serial_patterns:
+                        match = re.search(pattern, content, re.IGNORECASE)
+                        if match:
+                            info['serial'] = match.group(1).strip()
+                            break
+                    
+                    # Поиск информации о тонере/чернилах
+                    toner_patterns = [
+                        r'Toner[:\s]+([0-9]+)%',
+                        r'Black[:\s]+([0-9]+)%',
+                        r'Ink[:\s]+([0-9]+)%',
+                        r'Cartridge[:\s]+([0-9]+)%'
+                    ]
+                    
+                    for pattern in toner_patterns:
+                        match = re.search(pattern, content, re.IGNORECASE)
+                        if match:
+                            level = int(match.group(1))
+                            if 'toner' in pattern.lower() or 'black' in pattern.lower():
+                                info['toner_level'] = level
+                            else:
+                                info['ink_level'] = level
+                            break
+                    
+                    # Поиск счетчика страниц
+                    page_patterns = [
+                        r'Page\s+Count[:\s]+([0-9,]+)',
+                        r'Pages[:\s]+([0-9,]+)',
+                        r'Counter[:\s]+([0-9,]+)'
+                    ]
+                    
+                    for pattern in page_patterns:
+                        match = re.search(pattern, content, re.IGNORECASE)
+                        if match:
+                            info['page_count'] = match.group(1).replace(',', '')
+                            break
+                    
+                    # Поиск статуса
+                    status_patterns = [
+                        r'Status[:\s]+([^\n<]+)',
+                        r'Ready', r'Online', r'Offline', r'Error', r'Busy'
+                    ]
+                    
+                    for pattern in status_patterns:
+                        if isinstance(pattern, str):
+                            if pattern.lower() in content_lower:
+                                info['status'] = pattern
+                                break
+                        else:
+                            match = re.search(pattern, content, re.IGNORECASE)
+                            if match:
+                                info['status'] = match.group(1).strip()
+                                break
+                    
+            except Exception as e:
+                app.logger.debug(f'Ошибка получения основной страницы принтера {ip}:{port}: {e}')
+            
+            # Пробуем SNMP для дополнительной информации
+            try:
+                import subprocess
+                # Попытка получить системную информацию через SNMP
+                result = subprocess.run([
+                    'snmpget', '-v2c', '-c', 'public', ip,
+                    '1.3.6.1.2.1.1.1.0',  # sysDescr
+                    '1.3.6.1.2.1.1.5.0',  # sysName
+                    '1.3.6.1.2.1.1.6.0'   # sysLocation
+                ], capture_output=True, text=True, timeout=3)
+                
+                if result.returncode == 0:
+                    snmp_data = result.stdout
+                    
+                    # Парсинг SNMP ответа
+                    if 'sysDescr' in snmp_data and not info['model']:
+                        desc_match = re.search(r'String:\s*(.+)', snmp_data)
+                        if desc_match:
+                            info['model'] = desc_match.group(1).strip()
+                    
+                    if 'sysName' in snmp_data and not info['model']:
+                        name_match = re.search(r'String:\s*(.+)', snmp_data.split('sysName')[1])
+                        if name_match:
+                            info['model'] = name_match.group(1).strip()
+                            
+            except Exception as e:
+                app.logger.debug(f'SNMP недоступен для {ip}: {e}')
+            
+            # Удаляем None значения
+            info = {k: v for k, v in info.items() if v is not None}
+            
+            return info
+            
+        except Exception as e:
+            app.logger.debug(f'Ошибка получения информации о принтере {ip}: {e}')
+            return {}
+    
+    def get_hostname(ip):
+        """Получить имя хоста по IP через reverse DNS"""
+        try:
+            import socket
+            hostname = socket.gethostbyaddr(ip)[0]
+            return hostname
+        except Exception:
+            return ip
+    
+    def check_ip(ip):
+        """Проверка одного IP адреса"""
+        try:
+            # Сначала проверяем ping
+            if not ping_host(ip):
+                return None
+            
+            found_devices = []
+            
+            # Проверяем VNC (порт 5900)
+            if check_port(ip, 5900):
+                hostname = get_hostname(ip)
+                found_devices.append({
+                    'type': 'server',
+                    'ip': ip,
+                    'port': 5900,
+                    'name': f'VNC-{hostname}',
+                    'status': 'online'
+                })
+            
+            # Проверяем веб-интерфейсы принтеров (порты 80, 443, 9100, 631)
+            for port in [80, 443, 9100, 631]:
+                if check_port(ip, port):
+                    # Дополнительная проверка на принтер
+                    if is_likely_printer(ip, port):
+                        hostname = get_hostname(ip)
+                        printer_info = get_printer_info(ip, port)
+                        
+                        # Используем модель из printer_info, если доступна
+                        display_name = printer_info.get('model', hostname)
+                        
+                        device_data = {
+                            'type': 'printer',
+                            'ip': ip,
+                            'port': port,
+                            'name': display_name,
+                            'status': 'online',
+                            'web_interface': f'http{"s" if port == 443 else ""}://{ip}:{port}'
+                        }
+                        
+                        # Добавляем подробную информацию, если доступна
+                        device_data.update(printer_info)
+                        
+                        found_devices.append(device_data)
+            
+            return found_devices if found_devices else None
+            
+        except Exception:
+            return None
+    
+    def ping_host(ip):
+        """Проверка доступности хоста"""
+        try:
+            if platform.system().lower() == 'windows':
+                cmd = ['ping', '-n', '1', '-w', '1000', ip]
+            else:
+                cmd = ['ping', '-c', '1', '-W', '1', ip]
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            return result.returncode == 0
+        except Exception:
+            return False
+    
+    def check_port(ip, port):
+        """Проверка открытого порта"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            result = sock.connect_ex((ip, port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+    
+    def is_likely_printer(ip, port):
+        """Улучшенная проверка на принтер"""
+        try:
+            import urllib.request
+            import urllib.error
+            import re
+            
+            url = f'http{"s" if port == 443 else ""}://{ip}:{port}'
+            req = urllib.request.Request(url, method='GET')
+            
+            with urllib.request.urlopen(req, timeout=5) as response:
+                headers = dict(response.headers)
+                content = response.read(5000).decode('utf-8', errors='ignore').lower()
+                
+                # Признаки принтера в HTTP заголовках
+                server = headers.get('Server', '').lower()
+                content_type = headers.get('Content-Type', '').lower()
+                
+                # Расширенный список ключевых слов принтеров
+                printer_keywords = [
+                    'printer', 'hp', 'canon', 'epson', 'brother', 'xerox',
+                    'lexmark', 'samsung', 'kyocera', 'ricoh', 'panasonic',
+                    'sharp', 'toshiba', 'konica', 'minolta', 'oki',
+                    'dell', 'xerox', 'fuji', 'zebra', 'dymo'
+                ]
+                
+                # Проверка заголовков
+                header_match = any(keyword in server for keyword in printer_keywords)
+                
+                # Проверка Content-Type
+                content_type_match = any(keyword in content_type for keyword in printer_keywords)
+                
+                # Проверка содержимого страницы (title, текст)
+                title_match = False
+                if '<title>' in content:
+                    title_match = any(keyword in content for keyword in printer_keywords)
+                
+                # Проверка URL путей (часто в принтерах есть /printer, /status, /main)
+                path_match = any(path in content for path in ['/printer', '/status', '/main', '/device', '/web'])
+                
+                # Если порт 9100 - скорее всего это принтер (стандартный порт печати)
+                port_match = port == 9100
+                
+                # Достаточно любого совпадения
+                is_printer = header_match or content_type_match or title_match or path_match or port_match
+                
+                if is_printer:
+                    app.logger.info(f'Найден принтер {ip}:{port} - признаки: header={header_match}, content_type={content_type_match}, title={title_match}, path={path_match}, port={port_match}')
+                
+                return is_printer
+                
+        except Exception as e:
+            app.logger.debug(f'Ошибка проверки принтера {ip}:{port}: {e}')
+            return False
+    
+    # Параллельная проверка IP адресов
+    checked_count = 0
+    responsive_count = 0
+    
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as executor:
+        future_to_ip = {executor.submit(check_ip, ip): ip for ip in ips}
+        
+        for future in concurrent.futures.as_completed(future_to_ip):
+            try:
+                checked_count += 1
+                devices = future.result()
+                if devices:
+                    responsive_count += 1
+                    results.extend(devices)
+            except Exception as e:
+                app.logger.error(f'Ошибка при проверке IP: {e}')
+    
+    app.logger.info(f'Сканирование завершено: проверено {checked_count}/{len(ips)} IP, ответило {responsive_count}, найдено устройств: {len(results)}')
+    
+    return jsonify({
+        'success': True,
+        'range': range_input,
+        'scanned_ips': len(ips),
+        'found_devices': len(results),
+        'results': results
+    })
 
 
 @app.route('/api/favorites/<string:device_type>/<int:device_id>', methods=['PUT', 'POST'])

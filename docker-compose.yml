@@ -34,6 +34,7 @@ services:
       - "6080:6080"  # noVNC WebSocket прокси
     volumes:
       - vnc_manager_data:/app/instance  # Общий TokenFile и логи websockify
+      - vnc_manager_db:/app/vnc_manager.db  # Общий доступ к базе данных
     environment:
       - NOVNC_PROXY_PORT=6080
     command: ["python", "-m", "websockify", "--token-plugin", "TokenFile", "--token-source", "/app/instance/novnc_tokens.txt", "--verbose", "6080"]
