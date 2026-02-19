@@ -2141,36 +2141,52 @@
             const statusClass = device.status === 'online' ? 'status-online' : 'status-offline';
             const statusText = device.status === 'online' ? 'Онлайн' : 'Офлайн';
 
+            // Формируем всю информацию в одну строку
+            let infoParts = [];
+            infoParts.push(device.ip + (device.port ? `:${device.port}` : ''));
+            
+            if (device.model && device.model !== device.name) {
+                infoParts.push(device.model);
+            }
+            if (device.manufacturer) {
+                infoParts.push(device.manufacturer);
+            }
+            if (device.toner_level !== undefined) {
+                infoParts.push(`Т:${device.toner_level}%`);
+            }
+            if (device.ink_level !== undefined) {
+                infoParts.push(`Ч:${device.ink_level}%`);
+            }
+            if (device.page_count) {
+                infoParts.push(`С:${device.page_count}`);
+            }
+
             return `
-                <div class="card" style="padding: 16px; display: flex; align-items: center; gap: 16px;">
-                    <div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}">
+                <div class="card" style="padding: 8px; display: flex; align-items: center; gap: 8px;">
+                    <div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 28px; height: 28px; font-size: 12px;">
                         <i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i>
                     </div>
                     <div style="flex: 1; min-width: 0;">
-                        <div style="font-weight: 600; margin-bottom: 4px;">
+                        <div style="font-weight: 600; margin-bottom: 1px; font-size: 13px;">
                             ${device.name || `${device.type}-${device.ip}`}
-                            ${exists ? '<span style="font-size: 12px; color: var(--success); margin-left: 8px;">(уже добавлен)</span>' : ''}
+                            ${exists ? '<span style="font-size: 10px; color: var(--success); margin-left: 4px;">(✓)</span>' : ''}
                         </div>
-                        <div style="font-size: 14px; color: var(--text-secondary); margin-bottom: 4px;">
-                            ${device.ip}${device.port ? `:${device.port}` : ''}
-                        </div>
-                        <div style="font-size: 12px;">
-                            <span class="status-badge ${statusClass}">
-                                <span class="status-dot"></span>
-                                ${statusText}
-                            </span>
+                        <div style="font-size: 11px; color: var(--text-secondary);">
+                            ${infoParts.join(' • ')}
                         </div>
                     </div>
-                    <div style="display: flex; gap: 8px;">
+                    <div style="display: flex; gap: 4px; align-items: center;">
+                        <span class="status-badge ${statusClass}" style="font-size: 9px; padding: 2px 6px;">
+                            <span class="status-dot" style="width: 4px; height: 4px;"></span>
+                            ${statusText}
+                        </span>
                         ${!exists ? `
-                            <button class="btn" onclick="openAddDeviceModalFromScan('${device.type}', ${JSON.stringify(device).replace(/"/g, '&quot;')})">
+                            <button class="btn" onclick="openAddDeviceModalFromScan('${device.type}', ${JSON.stringify(device).replace(/"/g, '&quot;')})" style="padding: 4px 8px; font-size: 11px;">
                                 <i class="fas fa-plus"></i>
-                                <span>Добавить</span>
                             </button>
                         ` : `
-                            <button class="btn" disabled>
+                            <button class="btn" disabled style="padding: 4px 8px; font-size: 11px;">
                                 <i class="fas fa-check"></i>
-                                <span>Добавлено</span>
                             </button>
                         `}
                     </div>

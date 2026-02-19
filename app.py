@@ -753,10 +753,14 @@ def scan_network():
     def check_ip(ip):
         """Проверка одного IP адреса"""
         try:
+            app.logger.debug(f'Начало проверки IP: {ip}')
+            
             # Сначала проверяем ping
             if not ping_host(ip):
+                app.logger.debug(f'IP {ip} не отвечает на ping')
                 return None
             
+            app.logger.debug(f'IP {ip} отвечает на ping, проверяем порты')
             found_devices = []
             
             # Проверяем VNC (порт 5900)
@@ -769,10 +773,12 @@ def scan_network():
                     'name': f'VNC-{hostname}',
                     'status': 'online'
                 })
+                app.logger.info(f'Найден VNC сервер: {ip}:5900')
             
             # Проверяем веб-интерфейсы принтеров (порты 80, 443, 9100, 631)
             for port in [80, 443, 9100, 631]:
                 if check_port(ip, port):
+                    app.logger.debug(f'IP {ip} имеет открытый порт {port}, проверяем на принтер')
                     # Дополнительная проверка на принтер
                     if is_likely_printer(ip, port):
                         hostname = get_hostname(ip)
@@ -794,10 +800,17 @@ def scan_network():
                         device_data.update(printer_info)
                         
                         found_devices.append(device_data)
+                        app.logger.info(f'Найден принтер: {ip}:{port} - {display_name}')
+            
+            if found_devices:
+                app.logger.debug(f'IP {ip}: найдено {len(found_devices)} устройств')
+            else:
+                app.logger.debug(f'IP {ip}: устройств не найдено')
             
             return found_devices if found_devices else None
             
-        except Exception:
+        except Exception as e:
+            app.logger.error(f'Ошибка при проверке IP {ip}: {e}')
             return None
     
     def ping_host(ip):
@@ -808,9 +821,12 @@ def scan_network():
             else:
                 cmd = ['ping', '-c', '1', '-W', '1', ip]
             
+            app.logger.debug(f'Проверка ping для {ip}: {" ".join(cmd)}')
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=3)
+            app.logger.debug(f'Ping {ip}: returncode={result.returncode}, stdout={result.stdout[:100]}')
             return result.returncode == 0
-        except Exception:
+        except Exception as e:
+            app.logger.error(f'Ошибка ping для {ip}: {e}')
             return False
     
     def check_port(ip, port):
@@ -820,8 +836,10 @@ def scan_network():
             sock.settimeout(2)
             result = sock.connect_ex((ip, port))
             sock.close()
+            app.logger.debug(f'Проверка порта {ip}:{port} - {"открыт" if result == 0 else "закрыт"}')
             return result == 0
-        except Exception:
+        except Exception as e:
+            app.logger.debug(f'Ошибка проверки порта {ip}:{port}: {e}')
             return False
     
     def is_likely_printer(ip, port):
