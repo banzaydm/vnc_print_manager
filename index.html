@@ -34,10 +34,6 @@
         }
         
         [data-theme="dark"] {
-            --primary: #6366f1;
-            --primary-dark: #4f46e5;
-            --primary-light: rgba(99, 102, 241, 0.2);
-            
             --bg-color: #0f172a;
             --text-color: #cbd5e1;
             --card-bg: #1e293b;
@@ -623,6 +619,10 @@
             animation: slideUp 0.3s ease;
         }
         
+        .modal.settings-modal {
+            max-width: 650px;
+        }
+        
         @keyframes slideUp {
             from { transform: translateY(20px); opacity: 0; }
             to { transform: translateY(0); opacity: 1; }
@@ -1102,6 +1102,10 @@
                         <i class="fas fa-tags"></i>
                         <span>Группы</span>
                     </button>
+                    <button class="nav-tab" data-page="subnets">
+                        <i class="fas fa-sitemap"></i>
+                        <span>Подсети</span>
+                    </button>
                     <button class="nav-tab" data-page="scan">
                         <i class="fas fa-network-wired"></i>
                         <span>Сканирование</span>
@@ -1113,7 +1117,7 @@
                 <button class="btn-icon" id="themeSwitch" title="Тема">
                     <i class="fas fa-moon"></i>
                 </button>
-                <button class="btn-icon" id="settingsBtn" title="Настройки">
+                <button class="btn-icon" id="settingsBtn" title="Настройки" onclick="showSettingsModal()">
                     <i class="fas fa-cog"></i>
                 </button>
                 <button class="btn" id="addBtn">
@@ -1241,6 +1245,26 @@
                 </div>
             </div>
 
+            <!-- Контейнер для страницы подсетей -->
+            <div id="subnetsContainer" style="display: none;">
+                <div class="table-container">
+                    <div class="table-header">
+                        <h2>Подсети</h2>
+                        <div class="table-stats" id="subnetsStats">0</div>
+                    </div>
+                    <div id="subnetsTree" class="tree-container" style="padding: 16px;"></div>
+                    <div id="subnetsEmpty" class="empty-state" style="display: none;">
+                        <div class="empty-icon"><i class="fas fa-sitemap"></i></div>
+                        <h3 class="empty-title">Подсети не найдены</h3>
+                        <p class="empty-description">Добавьте устройства для отображения подсетей</p>
+                        <button class="btn" onclick="showAddModal()">
+                            <i class="fas fa-plus"></i>
+                            <span>Добавить устройство</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
             <!-- Контейнер для страницы групп -->
             <div id="groupsContainer" style="display: none;">
                 <div class="table-container">
@@ -1267,21 +1291,146 @@
                 </div>
             </div>
 
+            <!-- Контейнер для страницы настроек -->
+            <div id="settingsContainer" style="display: none;">
+                <div class="table-container">
+                    <div class="table-header">
+                        <h2>Настройки</h2>
+                    </div>
+                    
+                    <div style="padding: 20px;">
+                        <div class="settings-section">
+                            <h3 style="margin-bottom: 20px; color: var(--text-primary);">Внешний вид</h3>
+                            
+                            <!-- Загрузка favicon -->
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Favicon (логотип)</label>
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <input type="file" id="faviconInput" accept=".ico,.png,.jpg,.jpeg,.gif,.svg" style="display: none;">
+                                    <button type="button" class="btn btn-sm" onclick="document.getElementById('faviconInput').click()">
+                                        <i class="fas fa-upload"></i>
+                                        <span>Выбрать файл</span>
+                                    </button>
+                                    <span id="faviconFileName" style="font-size: 12px; opacity: 0.7;">Файл не выбран</span>
+                                </div>
+                                <div id="faviconPreview" style="margin-top: 8px; display: none;">
+                                    <img id="faviconPreviewImg" src="" alt="Preview" style="width: 32px; height: 32px; border: 1px solid var(--card-border); border-radius: 4px;">
+                                </div>
+                            </div>
+                            
+                            <!-- Загрузка логотипа -->
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Логотип (в шапке)</label>
+                                <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                                    <input type="file" id="logoInput" accept=".png,.jpg,.jpeg,.gif,.svg,.webp" style="display: none;">
+                                    <button type="button" class="btn btn-sm" onclick="document.getElementById('logoInput').click()">
+                                        <i class="fas fa-upload"></i>
+                                        <span>Выбрать файл</span>
+                                    </button>
+                                    <button type="button" class="btn btn-sm" onclick="resetLogo()" style="background: var(--danger);">
+                                        <i class="fas fa-times"></i>
+                                        <span>Сбросить</span>
+                                    </button>
+                                    <span id="logoFileName" style="font-size: 12px; opacity: 0.7;">Файл не выбран</span>
+                                </div>
+                                <div id="logoPreview" style="margin-top: 8px; display: none;">
+                                    <img id="logoPreviewImg" src="" alt="Preview" style="max-height: 40px; border: 1px solid var(--card-border); border-radius: 4px;">
+                                </div>
+                            </div>
+                            
+                            <!-- Цветовая схема -->
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Цветовая схема</label>
+                                <select id="themeSelect" class="form-select">
+                                    <option value="light">Светлая</option>
+                                    <option value="dark">Темная</option>
+                                </select>
+                            </div>
+                            
+                            <!-- Основной цвет -->
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Основной цвет</label>
+                                <div style="display: flex; align-items: center; gap: 12px;">
+                                    <input type="color" id="primaryColorInput" value="#4a6cf7" style="width: 50px; height: 36px; border: 1px solid var(--input-border); border-radius: 6px; cursor: pointer;">
+                                    <input type="text" id="primaryColorText" class="form-input" value="#4a6cf7" style="flex: 1; font-family: monospace;" placeholder="#4a6cf7">
+                                </div>
+                            </div>
+                            
+                            <!-- Название приложения -->
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Название приложения</label>
+                                <input type="text" id="appTitleInput" class="form-input" value="VNC Manager" placeholder="VNC Manager">
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h3 style="margin-bottom: 20px; color: var(--text-primary);">Данные</h3>
+                            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 20px;">
+                                <button class="btn" onclick="showImportExportModal()">
+                                    <i class="fas fa-file-export"></i>
+                                    <span>Импорт / Экспорт</span>
+                                </button>
+                                <button class="btn" onclick="createBackup()">
+                                    <i class="fas fa-download"></i>
+                                    <span>Сделать Backup</span>
+                                </button>
+                                <button class="btn" onclick="showRestoreModal()">
+                                    <i class="fas fa-upload"></i>
+                                    <span>Восстановить</span>
+                                </button>
+                            </div>
+                        </div>
+
+                        <div class="settings-section">
+                            <h3 style="margin-bottom: 20px; color: var(--text-primary);">Очистка базы (выборочно)</h3>
+                            <div style="display: flex; flex-direction: column; gap: 8px; margin-bottom: 20px;">
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="clearDbServers" checked>
+                                    Серверы
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="clearDbPrinters" checked>
+                                    Принтеры
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="clearDbGroups" checked>
+                                    Группы
+                                </label>
+                            </div>
+                            <button class="btn" onclick="openSelectiveClearModal()">
+                                <i class="fas fa-broom"></i>
+                                <span>Очистить</span>
+                            </button>
+                        </div>
+
+                        <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--card-border);">
+                            <button class="btn btn-primary" onclick="saveSettings()">
+                                <i class="fas fa-save"></i>
+                                <span>Сохранить настройки</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <!-- Контейнер для страницы сканирования сети -->
             <div id="scanContainer" style="display: none;">
                 <div class="table-container">
                     <div class="table-header">
                         <h2>Сканирование сети</h2>
                         <div style="display: flex; gap: 12px; align-items: center;">
-                            <input type="text" id="scanRange" placeholder="192.168.1.0/24" class="form-input scan-input">
-                            <button class="btn" id="startScanBtn">
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <label for="scanRange" style="font-size: 14px; color: var(--text-color);">Диапазон:</label>
+                                <input type="text" id="scanRange" class="form-input" placeholder="192.168.1.0/24" style="width: 150px;">
+                            </div>
+                            <button id="startScanBtn" class="btn">
                                 <i class="fas fa-search"></i>
-                                <span>Начать сканирование</span>
+                                Начать сканирование
                             </button>
                         </div>
                     </div>
                     
-                    <div id="scanProgress" style="display: none; margin: 20px 0;">
+                    <div id="scanProgress" style="display: none; margin: 20px 16px;">
                         <div style="display: flex; align-items: center; gap: 12px;">
                             <div style="flex: 1; height: 8px; background: var(--card-border); border-radius: 4px; overflow: hidden;">
                                 <div id="scanProgressBar" style="height: 100%; background: var(--primary); width: 0%; transition: width 0.3s;"></div>
@@ -1293,7 +1442,7 @@
                         </div>
                     </div>
 
-                    <div id="scanResults" style="margin-top: 20px;">
+                    <div id="scanResults" style="margin-top: 20px; margin-left: 16px; margin-right: 16px;">
                         <div id="scanEmpty" style="text-align: center; padding: 40px; color: var(--text-secondary);">
                             <i class="fas fa-network-wired" style="font-size: 48px; margin-bottom: 16px; opacity: 0.3;"></i>
                             <p>Нажмите "Начать сканирование" для поиска VNC серверов и принтеров в сети</p>
@@ -1413,62 +1562,6 @@
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal()">Отмена</button>
                 <button class="btn" id="clearDbNextBtn" onclick="clearDbNext()">Продолжить</button>
-                <button class="btn" id="clearDbConfirmBtn" onclick="clearDbConfirm()" style="display: none;">Очистить</button>
-            </div>
-        </div>
-    </div>
-
-    <div id="settingsModal" class="modal-overlay">
-        <div class="modal">
-            <div class="modal-header">
-                <h3 class="modal-title">Настройки</h3>
-                <button class="modal-close" onclick="closeModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="form-group" style="margin-bottom: 18px;">
-                    <label class="form-label">Данные</label>
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <button class="btn" onclick="showImportExportModal()">
-                            <i class="fas fa-file-export"></i>
-                            <span>Импорт / Экспорт</span>
-                        </button>
-                    </div>
-                </div>
-
-                <div class="form-group">
-                    <label class="form-label">Очистка базы (выборочно)</label>
-                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                        <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="checkbox" id="clearDbServers" checked>
-                            Серверы
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="checkbox" id="clearDbPrinters" checked>
-                            Принтеры
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="checkbox" id="clearDbGroups" checked>
-                            Группы
-                        </label>
-                    </div>
-                    <button class="btn" onclick="openSelectiveClearModal()" style="margin-top: 14px;">
-                        <i class="fas fa-broom"></i>
-                        <span>Очистить</span>
-                    </button>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn" onclick="closeModal()">Закрыть</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Модальное окно группы -->
-    <div id="groupModal" class="modal-overlay">
-        <div class="modal">
-            <div class="modal-header">
-                <h3 class="modal-title">Добавить группу</h3>
-                <button class="modal-close" onclick="closeModal()">&times;</button>
             </div>
             <div class="modal-body">
                 <form id="groupForm">
@@ -1495,6 +1588,187 @@
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal()">Отмена</button>
                 <button class="btn" onclick="saveGroup()">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно подсети -->
+    <div id="subnetModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Редактировать подсеть</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="subnetForm">
+                    <input type="hidden" id="subnetId" value="">
+                    <div class="form-group">
+                        <label class="form-label">Понятное название</label>
+                        <input type="text" id="subnetName" class="form-input" placeholder="Например: Офисная сеть">
+                        <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                            Укажите удобное название для этой подсети
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">Диапазон IP</label>
+                        <input type="text" id="subnetRange" class="form-input" readonly>
+                        <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                            Подсеть в формате CIDR (например: 192.168.1.0/24)
+                        </small>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal()">Отмена</button>
+                <button class="btn" onclick="saveSubnet()">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно восстановления из бэкапа -->
+    <div id="restoreModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Восстановление из бэкапа</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Выберите бэкап для восстановления</label>
+                    <div id="modalBackupList" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--card-border); border-radius: 4px; padding: 8px;">
+                        <div style="text-align: center; opacity: 0.6; padding: 20px;">
+                            Загрузка списка бэкапов...
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <small style="color: var(--error); font-weight: 500;">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        Внимание: Восстановление заменит все текущие данные!
+                    </small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="closeModal()">Отмена</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно настроек -->
+    <div id="settingsModal" class="modal-overlay">
+        <div class="modal settings-modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Настройки</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group" style="margin-bottom: 18px;">
+                    <label class="form-label">Внешний вид</label>
+                    
+                    <!-- Загрузка favicon -->
+                    <div style="margin-bottom: 16px;">
+                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Favicon (логотип)</label>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <input type="file" id="faviconInput" accept=".ico,.png,.jpg,.jpeg,.gif,.svg" style="display: none;">
+                            <button type="button" class="btn btn-sm" onclick="document.getElementById('faviconInput').click()">
+                                <i class="fas fa-upload"></i>
+                                <span>Выбрать файл</span>
+                            </button>
+                            <span id="faviconFileName" style="font-size: 12px; opacity: 0.7;">Файл не выбран</span>
+                        </div>
+                        <div id="faviconPreview" style="margin-top: 8px; display: none;">
+                            <img id="faviconPreviewImg" src="" alt="Preview" style="width: 32px; height: 32px; border: 1px solid var(--card-border); border-radius: 4px;">
+                        </div>
+                    </div>
+                    
+                    <!-- Загрузка логотипа -->
+                    <div style="margin-bottom: 16px;">
+                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Логотип (в шапке)</label>
+                        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
+                            <input type="file" id="logoInput" accept=".png,.jpg,.jpeg,.gif,.svg,.webp" style="display: none;">
+                            <button type="button" class="btn btn-sm" onclick="document.getElementById('logoInput').click()">
+                                <i class="fas fa-upload"></i>
+                                <span>Выбрать файл</span>
+                            </button>
+                            <button type="button" class="btn btn-sm" onclick="resetLogo()" style="background: var(--danger);">
+                                <i class="fas fa-times"></i>
+                                <span>Сбросить</span>
+                            </button>
+                            <span id="logoFileName" style="font-size: 12px; opacity: 0.7;">Файл не выбран</span>
+                        </div>
+                        <div id="logoPreview" style="margin-top: 8px; display: none;">
+                            <img id="logoPreviewImg" src="" alt="Preview" style="max-height: 40px; border: 1px solid var(--card-border); border-radius: 4px;">
+                        </div>
+                    </div>
+                    
+                    <!-- Цветовая схема -->
+                    <div style="margin-bottom: 16px;">
+                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Цветовая схема</label>
+                        <select id="themeSelect" class="form-select">
+                            <option value="light">Светлая</option>
+                            <option value="dark">Темная</option>
+                        </select>
+                    </div>
+                    
+                    <!-- Основной цвет -->
+                    <div style="margin-bottom: 16px;">
+                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Основной цвет</label>
+                        <div style="display: flex; align-items: center; gap: 12px;">
+                            <input type="color" id="primaryColorInput" value="#4a6cf7" style="width: 50px; height: 36px; border: 1px solid var(--input-border); border-radius: 6px; cursor: pointer;">
+                            <input type="text" id="primaryColorText" class="form-input" value="#4a6cf7" style="flex: 1; font-family: monospace;" placeholder="#4a6cf7">
+                        </div>
+                    </div>
+                    
+                    <!-- Название приложения -->
+                    <div style="margin-bottom: 16px;">
+                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Название приложения</label>
+                        <input type="text" id="appTitleInput" class="form-input" value="VNC Manager" placeholder="VNC Manager">
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 18px;">
+                    <label class="form-label">Данные</label>
+                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button class="btn" onclick="showImportExportModal()">
+                            <i class="fas fa-file-export"></i>
+                            <span>Импорт / Экспорт</span>
+                        </button>
+                        <button class="btn" onclick="createBackup()">
+                            <i class="fas fa-download"></i>
+                            <span>Сделать Backup</span>
+                        </button>
+                        <button class="btn" onclick="showRestoreModal()">
+                            <i class="fas fa-upload"></i>
+                            <span>Восстановить</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 18px;">
+                    <label class="form-label">Очистка базы (выборочно)</label>
+                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="clearDbServers" checked>
+                            Серверы
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="clearDbPrinters" checked>
+                            Принтеры
+                        </label>
+                        <label style="display: flex; align-items: center; gap: 8px;">
+                            <input type="checkbox" id="clearDbGroups" checked>
+                            Группы
+                        </label>
+                    </div>
+                    <button class="btn" onclick="openSelectiveClearModal()" style="margin-top: 14px;">
+                        <i class="fas fa-broom"></i>
+                        <span>Очистить</span>
+                    </button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" onclick="saveSettings()">Сохранить</button>
+                <button class="btn" onclick="closeModal()">Закрыть</button>
             </div>
         </div>
     </div>
@@ -1591,13 +1865,21 @@
         let editingGroupId = null;
         let currentSort = { field: 'name', direction: 'asc' };
         let expandedGroups = new Set();
+        let expandedSubnets = new Set();
+        let subnetNames = new Map(); // Хранилище пользовательских названий подсетей
         let _clearDbOptions = { clear_servers: true, clear_printers: true, clear_groups: true };
         let expandedGroupFilterNodes = new Set();
         let moveContext = null;
         
         // Инициализация при загрузке
-        document.addEventListener('DOMContentLoaded', function() {
-            // Загружаем тему
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Загружаем настройки
+            loadAndApplySettings();
+            
+            // Загружаем названия подсетей
+            await loadSubnetNames();
+            
+            // Загружаем тему из localStorage как запасной вариант
             const savedTheme = localStorage.getItem('theme') || 'light';
             document.body.setAttribute('data-theme', savedTheme);
             updateThemeButton(savedTheme);
@@ -1610,6 +1892,29 @@
                 showPage('favorites');
             });
         });
+
+        async function loadAndApplySettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const settings = await response.json();
+                
+                // Применяем настройки
+                applySettings(settings);
+                
+                // Если есть favicon, обновляем его
+                if (settings.favicon_path) {
+                    updateFavicon(settings.favicon_path);
+                }
+                
+                // Если есть логотип, обновляем его
+                if (settings.logo_path) {
+                    updateLogo(settings.logo_path);
+                }
+                
+            } catch (error) {
+                console.error('Ошибка загрузки настроек при инициализации:', error);
+            }
+        }
         
         function setupEventListeners() {
             // Навигация
@@ -1695,6 +2000,27 @@
             document.body.setAttribute('data-theme', newTheme);
             localStorage.setItem('theme', newTheme);
             updateThemeButton(newTheme);
+            
+            // Применяем сохраненные цвета после смены темы
+            applyPrimaryColor();
+        }
+
+        async function applyPrimaryColor() {
+            try {
+                const response = await fetch('/api/settings');
+                const settings = await response.json();
+                
+                if (settings.primary_color) {
+                    document.documentElement.style.setProperty('--primary', settings.primary_color);
+                    const color = settings.primary_color;
+                    const darkerColor = adjustColor(color, -20);
+                    const lighterColor = hexToRgba(color, 0.1);
+                    document.documentElement.style.setProperty('--primary-dark', darkerColor);
+                    document.documentElement.style.setProperty('--primary-light', lighterColor);
+                }
+            } catch (error) {
+                console.error('Ошибка применения цвета:', error);
+            }
         }
         
         function updateThemeButton(theme) {
@@ -1974,7 +2300,9 @@
             document.getElementById('groupsContainer').style.display = 'none';
             document.getElementById('devicesControls').style.display = 'none';
             document.getElementById('allGroupsContainer').style.display = 'none';
+            document.getElementById('subnetsContainer').style.display = 'none';
             document.getElementById('scanContainer').style.display = 'none';
+            document.getElementById('settingsContainer').style.display = 'none';
             
             if (page === 'groups') {
                 // Показываем страницу групп
@@ -1984,6 +2312,13 @@
                 document.getElementById('devicesControls').style.display = 'flex';
                 document.getElementById('allGroupsContainer').style.display = 'block';
                 renderAllGroupsPage();
+            } else if (page === 'subnets') {
+                document.getElementById('devicesControls').style.display = 'flex';
+                document.getElementById('subnetsContainer').style.display = 'block';
+                renderSubnetsPage();
+            } else if (page === 'settings') {
+                document.getElementById('settingsContainer').style.display = 'block';
+                loadSettings(); // Загружаем настройки при открытии
             } else if (page === 'scan') {
                 // Показываем страницу сканирования
                 document.getElementById('scanContainer').style.display = 'block';
@@ -2300,60 +2635,41 @@
                 devicesByGroup.get(gid).push(device);
             });
 
-            function _renderDeviceRow(device) {
-                const status = device.status || 'offline';
-                const fav = `<button class="favorite-btn ${device.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${device.id}, '${device.type}', ${device.is_favorite ? 'false' : 'true'})"><i class="fas fa-star"></i></button>`;
-                const icon = `<div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 26px; height: 26px;"><i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i></div>`;
+            function _renderDeviceTable(groupDevices, groupId) {
+                if (!groupDevices || groupDevices.length === 0) {
+                    return '<div style="padding: 8px 28px; opacity: 0.6; font-size: 13px;">Нет устройств в этой группе</div>';
+                }
 
-                const actions = device.type === 'server'
-                    ? `
-                        <button class="action-btn action-connect" onclick="event.stopPropagation(); connectToServer(${device.id})">
-                            <i class="fas fa-link"></i>
-                            <span>Подключиться</span>
-                        </button>
-                        <button class="action-btn" onclick="event.stopPropagation(); openNoVnc(${device.id})" title="Открыть noVNC в браузере">
-                            <i class="fas fa-desktop"></i>
-                            <span>noVNC</span>
-                        </button>
-                    `
-                    : `
-                        <button class="action-btn action-connect" onclick="event.stopPropagation(); openPrinterInterface('${escapeHtml(device.web_interface || '')}', '${device.ip}')">
-                            <i class="fas fa-external-link-alt"></i>
-                            <span>Веб-интерфейс</span>
-                        </button>
-                    `;
-
-                const editDelete = `
-                    <button class="action-btn" onclick="event.stopPropagation(); editDevice(${device.id}, '${device.type}')">
-                        <i class="fas fa-edit"></i>
-                        <span>Изменить</span>
-                    </button>
-                    <button class="action-btn action-delete" onclick="event.stopPropagation(); deleteDevice(${device.id}, '${device.type}')">
-                        <i class="fas fa-trash"></i>
-                        <span>Удалить</span>
-                    </button>
-                `;
-
-                return `
-                    <div style="display:flex; align-items:center; gap:10px; padding:2px 0;">
-                        ${icon}
-                        <div style="flex:1; min-width:0;">
-                            <div style="display:flex; align-items:center; gap:6px;">
-                                <strong style="font-size:13px;">${escapeHtml(device.name)}</strong>
-                                ${fav}
-                            </div>
-                            <div style="font-size:12px; opacity:0.75;">${escapeHtml(device.ip)}${device.port ? `:${device.port}` : ''}</div>
-                        </div>
-                        <span class="status-badge status-${status}" style="min-width:78px;">
-                            <span class="status-dot"></span>
-                            ${status === 'online' ? 'Онлайн' : 'Офлайн'}
-                        </span>
-                        <div class="device-actions" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
-                            ${actions}
-                            ${editDelete}
-                        </div>
+                const tableHtml = `
+                    <div style="padding: 8px 28px;">
+                        <table class="table" style="margin: 0; background: transparent; border: none; box-shadow: none;">
+                            <thead>
+                                <tr>
+                                    <th width="60">Тип</th>
+                                    <th width="200" class="sortable" data-sort="name" onclick="sortGroupTable(${groupId}, 'name')">
+                                        Имя
+                                        <span class="sort-icon"></span>
+                                    </th>
+                                    <th width="150" class="sortable" data-sort="ip" onclick="sortGroupTable(${groupId}, 'ip')">
+                                        IP адрес
+                                        <span class="sort-icon"></span>
+                                    </th>
+                                    <th width="100" class="sortable" data-sort="status" onclick="sortGroupTable(${groupId}, 'status')">
+                                        Статус
+                                        <span class="sort-icon"></span>
+                                    </th>
+                                    <th width="120">Группа</th>
+                                    <th width="280">Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="group-table-body-${groupId}">
+                                ${groupDevices.map(device => _renderDeviceTableRow(device)).join('')}
+                            </tbody>
+                        </table>
                     </div>
                 `;
+
+                return tableHtml;
             }
 
             function _renderGroupNode(group) {
@@ -2364,9 +2680,7 @@
 
                 const contentHtml = `
                     <div class="tree-content ${isExpanded ? 'expanded' : ''}" id="all-group-content-${group.id}">
-                        <div style="padding: 4px 0 4px 28px;">
-                            ${(groupDevices.length ? groupDevices.map(_renderDeviceRow).join('') : '')}
-                        </div>
+                        ${groupDevices.length ? _renderDeviceTable(groupDevices, group.id) : ''}
                         ${(hasChildren ? group.children.map(child => _renderGroupNode(child).outerHTML).join('') : '')}
                     </div>
                 `;
@@ -2400,6 +2714,441 @@
             }
 
             stats.textContent = `${groups.length} групп`;
+            
+            // Добавляем обработчики сортировки для динамически созданных таблиц
+            document.querySelectorAll('#allGroupsContainer .sortable').forEach(header => {
+                header.addEventListener('click', function() {
+                    const field = this.dataset.sort;
+                    const groupId = this.closest('table').querySelector('tbody').id.replace('group-table-body-', '');
+                    sortGroupTable(parseInt(groupId), field);
+                });
+            });
+        }
+
+        function _renderDeviceTableRow(device) {
+            const status = device.status || 'offline';
+            const fav = `<button class="favorite-btn ${device.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${device.id}, '${device.type}', ${device.is_favorite ? 'false' : 'true'})"><i class="fas fa-star"></i></button>`;
+            const icon = `<div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 26px; height: 26px;"><i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i></div>`;
+
+            const actions = device.type === 'server'
+                ? `
+                    <button class="action-btn action-connect" onclick="event.stopPropagation(); connectToServer(${device.id})">
+                        <i class="fas fa-link"></i>
+                        <span>Подключиться</span>
+                    </button>
+                    <button class="action-btn" onclick="event.stopPropagation(); openNoVnc(${device.id})" title="Открыть noVNC в браузере">
+                        <i class="fas fa-desktop"></i>
+                        <span>noVNC</span>
+                    </button>
+                `
+                : `
+                    <button class="action-btn action-connect" onclick="event.stopPropagation(); openPrinterInterface('${escapeHtml(device.web_interface || '')}', '${device.ip}')">
+                        <i class="fas fa-external-link-alt"></i>
+                        <span>Веб-интерфейс</span>
+                    </button>
+                `;
+
+            const editDelete = `
+                <button class="action-btn" onclick="event.stopPropagation(); editDevice(${device.id}, '${device.type}')">
+                    <i class="fas fa-edit"></i>
+                    <span>Изменить</span>
+                </button>
+                <button class="action-btn action-delete" onclick="event.stopPropagation(); deleteDevice(${device.id}, '${device.type}')">
+                    <i class="fas fa-trash"></i>
+                    <span>Удалить</span>
+                </button>
+            `;
+
+            return `
+                <tr>
+                    <td>${icon}</td>
+                    <td>
+                        <div style="display: flex; align-items: center; gap: 6px;">
+                            <strong style="font-size: 13px;">${escapeHtml(device.name)}</strong>
+                            ${fav}
+                        </div>
+                    </td>
+                    <td>
+                        <div style="font-size: 13px;">${escapeHtml(device.ip)}${device.port ? `:${device.port}` : ''}</div>
+                    </td>
+                    <td>
+                        <span class="status-badge status-${status}">
+                            <span class="status-dot"></span>
+                            ${status === 'online' ? 'Онлайн' : 'Офлайн'}
+                        </span>
+                    </td>
+                    <td>
+                        ${device.group_name ? `
+                            <div class="group-badge">
+                                <div class="group-color" style="background: ${device.group_color}"></div>
+                                ${escapeHtml(device.group_name)}
+                            </div>
+                        ` : '<span style="opacity: 0.6;">Без группы</span>'}
+                    </td>
+                    <td>
+                        <div class="actions">
+                            ${actions}
+                            ${editDelete}
+                        </div>
+                    </td>
+                </tr>
+            `;
+        }
+
+        function renderSubnetsPage() {
+            const treeContainer = document.getElementById('subnetsTree');
+            const emptyState = document.getElementById('subnetsEmpty');
+            const stats = document.getElementById('subnetsStats');
+
+            if (!treeContainer || !emptyState || !stats) return;
+
+            if (!devices || devices.length === 0) {
+                treeContainer.innerHTML = '';
+                emptyState.style.display = 'block';
+                stats.textContent = '0';
+                return;
+            }
+
+            emptyState.style.display = 'none';
+
+            // Группируем устройства по подсетям
+            const devicesBySubnet = new Map();
+            devices.forEach(device => {
+                const subnet = getSubnet(device.ip);
+                if (!devicesBySubnet.has(subnet)) devicesBySubnet.set(subnet, []);
+                devicesBySubnet.get(subnet).push(device);
+            });
+
+            function _renderSubnetNode(subnet, subnetDevices) {
+                const isExpanded = expandedSubnets.has(subnet);
+                const subnetName = getSubnetName(subnet);
+
+                const contentHtml = `
+                    <div class="tree-content ${isExpanded ? 'expanded' : ''}" id="subnet-content-${subnet.replace(/[^a-zA-Z0-9]/g, '_')}">
+                        ${subnetDevices.length ? _renderSubnetDeviceTable(subnetDevices, subnet) : ''}
+                    </div>
+                `;
+
+                const node = document.createElement('div');
+                node.className = 'tree-item';
+                node.innerHTML = `
+                    <div class="tree-header" onclick="toggleSubnet('${subnet}')">
+                        <div class="tree-toggle ${isExpanded ? 'rotated' : ''}">
+                            <i class="fas fa-chevron-right"></i>
+                        </div>
+                        
+                        <div class="tree-color" style="background: #3498db;"></div>
+                        <div class="tree-name">${escapeHtml(subnetName)}</div>
+                        <div class="tree-stats">${subnetDevices.length} устройств</div>
+                        <button class="btn-icon" onclick="event.stopPropagation(); getFreeIP('${subnet}')" title="Выдать свободный IP" style="margin-left: 12px;">
+                            <i class="fas fa-plus-circle"></i>
+                        </button>
+                        <button class="btn-icon" onclick="event.stopPropagation(); editSubnet('${subnet}')" title="Редактировать подсеть" style="margin-left: 8px;">
+                            <i class="fas fa-edit"></i>
+                        </button>
+                    </div>
+                    ${contentHtml}
+                `;
+                return node;
+            }
+
+            function _renderSubnetDeviceTable(subnetDevices, subnet) {
+                if (!subnetDevices || subnetDevices.length === 0) {
+                    return '<div style="padding: 8px 28px; opacity: 0.6; font-size: 13px;">Нет устройств в этой подсети</div>';
+                }
+
+                const tableHtml = `
+                    <div style="padding: 8px 28px;">
+                        <table class="table" style="margin: 0; background: transparent; border: none; box-shadow: none;">
+                            <thead>
+                                <tr>
+                                    <th width="150" class="sortable" data-sort="ip" onclick="sortSubnetTable('${subnet}', 'ip')">
+                                        IP адрес
+                                        <span class="sort-icon"></span>
+                                    </th>
+                                    <th width="60">Тип</th>
+                                    <th width="200" class="sortable" data-sort="name" onclick="sortSubnetTable('${subnet}', 'name')">
+                                        Имя
+                                        <span class="sort-icon"></span>
+                                    </th>
+                                    <th width="120">Группа</th>
+                                    <th width="100" class="sortable" data-sort="status" onclick="sortSubnetTable('${subnet}', 'status')">
+                                        Статус
+                                        <span class="sort-icon"></span>
+                                    </th>
+                                </tr>
+                            </thead>
+                            <tbody id="subnet-table-body-${subnet.replace(/[^a-zA-Z0-9]/g, '_')}">
+                                ${subnetDevices.map(device => _renderSubnetDeviceTableRow(device)).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+
+                return tableHtml;
+            }
+
+            function _renderSubnetDeviceTableRow(device) {
+                const status = device.status || 'offline';
+                const icon = `<div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 26px; height: 26px;"><i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i></div>`;
+
+                return `
+                    <tr>
+                        <td>
+                            <div style="font-size: 13px;">${escapeHtml(device.ip)}</div>
+                        </td>
+                        <td>${icon}</td>
+                        <td>
+                            <div style="display: flex; align-items: center; gap: 6px;">
+                                <strong style="font-size: 13px;">${escapeHtml(device.name)}</strong>
+                            </div>
+                        </td>
+                        <td>
+                            ${device.group_name ? `
+                                <div class="group-badge">
+                                    <div class="group-color" style="background: ${device.group_color}"></div>
+                                    ${escapeHtml(device.group_name)}
+                                </div>
+                            ` : '<span style="opacity: 0.6;">Без группы</span>'}
+                        </td>
+                        <td>
+                            <span class="status-badge status-${status}">
+                                <span class="status-dot"></span>
+                                ${status === 'online' ? 'Онлайн' : 'Офлайн'}
+                            </span>
+                        </td>
+                    </tr>
+                `;
+            }
+
+            treeContainer.innerHTML = '';
+            
+            // Сортируем подсети по IP-адресу от меньшего к большему
+            const sortedSubnets = Array.from(devicesBySubnet.keys()).sort((a, b) => {
+                // Извлекаем IP-адреса из CIDR нотации
+                const ipA = a.replace('/24', '');
+                const ipB = b.replace('/24', '');
+                
+                console.log('Comparing subnets:', a, b);
+                console.log('IPs to compare:', ipA, ipB);
+                
+                // Разбиваем IP на октеты и сравниваем
+                const octetsA = ipA.split('.').map(Number);
+                const octetsB = ipB.split('.').map(Number);
+                
+                console.log('Octets A:', octetsA, 'Octets B:', octetsB);
+                
+                // Сравниваем по каждому октету
+                for (let i = 0; i < 4; i++) {
+                    if (octetsA[i] !== octetsB[i]) {
+                        const result = octetsA[i] - octetsB[i];
+                        console.log('Comparison result:', result);
+                        return result;
+                    }
+                }
+                return 0;
+            });
+            
+            console.log('Final sorted subnets:', sortedSubnets);
+            
+            sortedSubnets.forEach(subnet => {
+                const subnetDevices = devicesBySubnet.get(subnet);
+                treeContainer.appendChild(_renderSubnetNode(subnet, subnetDevices));
+            });
+
+            stats.textContent = `${sortedSubnets.length} подсетей`;
+        }
+
+        function renderSettingsPage() {
+            const settingsContent = document.getElementById('settingsContent');
+            
+            settingsContent.innerHTML = `
+                <div style="padding: 20px;">
+                    <div class="settings-section">
+                        <h3 style="margin-bottom: 20px; color: var(--text-primary);">Общие настройки</h3>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Название приложения</label>
+                            <input type="text" id="appTitle" class="form-input" value="${document.title}">
+                            <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                                Отображается в заголовке окна браузера
+                            </small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Тема оформления</label>
+                            <select id="themeSelect" class="form-input form-select">
+                                <option value="light">Светлая</option>
+                                <option value="dark">Темная</option>
+                                <option value="auto">Автоматически (системная)</option>
+                            </select>
+                            <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                                Выберите цветовую тему интерфейса
+                            </small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Язык интерфейса</label>
+                            <select id="languageSelect" class="form-input form-select">
+                                <option value="ru">Русский</option>
+                                <option value="en">English</option>
+                            </select>
+                            <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                                Выберите язык интерфейса приложения
+                            </small>
+                        </div>
+                    </div>
+                    
+                    <div class="settings-section">
+                        <h3 style="margin-bottom: 20px; color: var(--text-primary);">Управление данными</h3>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Резервное копирование</label>
+                            <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+                                <button class="btn btn-primary" onclick="createBackup()">
+                                    <i class="fas fa-download"></i>
+                                    <span>Сделать Backup</span>
+                                </button>
+                                <button class="btn btn-secondary" onclick="showRestoreModal()">
+                                    <i class="fas fa-upload"></i>
+                                    <span>Восстановить</span>
+                                </button>
+                            </div>
+                            <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                                Создание резервной копии всех настроек и данных. Восстановление из ранее созданных копий.
+                            </small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label class="form-label">Последние бэкапы</label>
+                            <div id="backupList" style="max-height: 200px; overflow-y: auto; border: 1px solid var(--card-border); border-radius: 4px; padding: 8px;">
+                                <div style="text-align: center; opacity: 0.6; padding: 20px;">
+                                    Бэкапы не найдены
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Загружаем список бэкапов
+            loadBackupList();
+        }
+
+        function createBackup() {
+            // Создаем бэкап всех данных
+            const backupData = {
+                timestamp: new Date().toISOString(),
+                appTitle: document.title,
+                theme: document.body.getAttribute('data-theme'),
+                devices: devices,
+                groups: groups,
+                subnetNames: Array.from(subnetNames.entries()),
+                settings: {
+                    // Здесь можно добавить другие настройки
+                }
+            };
+            
+            // Отправляем на сервер для сохранения
+            fetch('/api/create_backup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(backupData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification('Backup создан успешно', 'success');
+                    loadBackupList(); // Обновляем список бэкапов
+                } else {
+                    showNotification('Ошибка создания backup', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error creating backup:', error);
+                showNotification('Ошибка соединения', 'error');
+            });
+        }
+
+        function showRestoreModal() {
+            // Показываем модальное окно восстановления
+            const modal = document.getElementById('restoreModal');
+            const backupList = document.getElementById('modalBackupList');
+            
+            if (backupList) {
+                // Обновляем список в модальном окне
+                loadBackupList();
+                modal.classList.add('active');
+            } else {
+                showNotification('Сначала создайте backup', 'error');
+            }
+        }
+
+        function loadBackupList() {
+            // Загружаем список бэкапов с сервера
+            fetch('/api/backups')
+            .then(response => response.json())
+            .then(data => {
+                if (data.success && data.backups && data.backups.length > 0) {
+                    // Обновляем список в настройках
+                    const backupListEl = document.getElementById('backupList');
+                    const modalBackupListEl = document.getElementById('modalBackupList');
+                    
+                    const backupHtml = data.backups.map(backup => `
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid var(--card-border);">
+                            <div>
+                                <div style="font-weight: 500;">${new Date(backup.timestamp).toLocaleString('ru-RU')}</div>
+                                <div style="font-size: 12px; opacity: 0.7;">${backup.appTitle || 'VNC Manager'}</div>
+                            </div>
+                            <button class="btn btn-sm" onclick="restoreFromBackup('${backup.filename}')">
+                                <i class="fas fa-history"></i>
+                                <span>Восстановить</span>
+                            </button>
+                        </div>
+                    `).join('');
+                    
+                    if (backupListEl) backupListEl.innerHTML = backupHtml;
+                    if (modalBackupListEl) modalBackupListEl.innerHTML = backupHtml;
+                } else {
+                    const noBackupsHtml = '<div style="text-align: center; opacity: 0.6; padding: 20px;">Бэкапы не найдены</div>';
+                    if (backupListEl) backupListEl.innerHTML = noBackupsHtml;
+                    if (modalBackupListEl) modalBackupListEl.innerHTML = noBackupsHtml;
+                }
+            })
+            .catch(error => {
+                console.error('Error loading backups:', error);
+            });
+        }
+
+        function restoreFromBackup(filename) {
+            if (!confirm('Восстановление из бэкапа заменит все текущие данные. Продолжить?')) {
+                return;
+            }
+            
+            fetch(`/api/restore_backup/${filename}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification('Данные восстановлены успешно', 'success');
+                    closeModal();
+                    // Перезагружаем данные
+                    loadData().then(() => {
+                        loadSubnetNames();
+                        // Обновляем текущую страницу
+                        if (currentPage === 'settings') {
+                            renderSettingsPage();
+                        }
+                    });
+                } else {
+                    showNotification('Ошибка восстановления', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error restoring backup:', error);
+                showNotification('Ошибка соединения', 'error');
+            });
         }
 
         function toggleAllGroup(groupId) {
@@ -2410,6 +3159,18 @@
             }
             const content = document.getElementById(`all-group-content-${groupId}`);
             const toggle = document.querySelector(`.tree-header[onclick="toggleAllGroup(${groupId})"] .tree-toggle`);
+            if (content) content.classList.toggle('expanded');
+            if (toggle) toggle.classList.toggle('rotated');
+        }
+
+        function toggleSubnet(subnet) {
+            if (expandedSubnets.has(subnet)) {
+                expandedSubnets.delete(subnet);
+            } else {
+                expandedSubnets.add(subnet);
+            }
+            const content = document.getElementById(`subnet-content-${subnet.replace(/[^a-zA-Z0-9]/g, '_')}`);
+            const toggle = document.querySelector(`.tree-header[onclick="toggleSubnet('${subnet}')"] .tree-toggle`);
             if (content) content.classList.toggle('expanded');
             if (toggle) toggle.classList.toggle('rotated');
         }
@@ -2498,8 +3259,9 @@
                         bValue = b.name;
                         break;
                     case 'ip':
-                        aValue = a.ip;
-                        bValue = b.ip;
+                        // Сравниваем только IP-адреса без портов
+                        aValue = a.ip.split(':')[0];
+                        bValue = b.ip.split(':')[0];
                         break;
                     case 'status':
                         aValue = a.status === 'online' ? 1 : 0;
@@ -2520,6 +3282,169 @@
                 
                 if (aValue < bValue) return currentSort.direction === 'asc' ? -1 : 1;
                 if (aValue > bValue) return currentSort.direction === 'asc' ? 1 : -1;
+                return 0;
+            });
+        }
+
+        // Хранилище сортировок для каждой группы
+        const groupSorts = new Map();
+
+        function sortGroupTable(groupId, field) {
+            // Получаем или создаем объект сортировки для группы
+            if (!groupSorts.has(groupId)) {
+                groupSorts.set(groupId, { field: 'name', direction: 'asc' });
+            }
+            
+            const groupSort = groupSorts.get(groupId);
+            
+            // Сбрасываем сортировку у всех заголовков таблицы группы
+            document.querySelectorAll(`#group-table-body-${groupId} th`).forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+            });
+            
+            // Устанавливаем новую сортировку
+            if (groupSort.field === field) {
+                groupSort.direction = groupSort.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                groupSort.field = field;
+                groupSort.direction = 'asc';
+            }
+            
+            // Обновляем иконку сортировки
+            const header = document.querySelector(`#group-table-body-${groupId} th[data-sort="${field}"]`);
+            if (header) {
+                header.classList.add(`sort-${groupSort.direction}`);
+            }
+            
+            // Получаем устройства группы и сортируем их
+            const groupDevices = devicesByGroup.get(groupId) || [];
+            sortGroupDevices(groupDevices, groupSort);
+            
+            // Обновляем таблицу
+            const tableBody = document.getElementById(`group-table-body-${groupId}`);
+            if (tableBody) {
+                tableBody.innerHTML = groupDevices.map(device => _renderDeviceTableRow(device)).join('');
+            }
+        }
+
+        function sortGroupDevices(devicesList, sortConfig) {
+            devicesList.sort((a, b) => {
+                let aValue, bValue;
+                
+                switch (sortConfig.field) {
+                    case 'name':
+                        aValue = a.name;
+                        bValue = b.name;
+                        break;
+                    case 'ip':
+                        // Сравниваем только IP-адреса без портов
+                        aValue = a.ip.split(':')[0];
+                        bValue = b.ip.split(':')[0];
+                        break;
+                    case 'status':
+                        aValue = a.status === 'online' ? 1 : 0;
+                        bValue = b.status === 'online' ? 1 : 0;
+                        break;
+                    case 'group':
+                        aValue = a.group_name || '';
+                        bValue = b.group_name || '';
+                        break;
+                    default:
+                        return 0;
+                }
+                
+                if (typeof aValue === 'string') {
+                    aValue = aValue.toLowerCase();
+                    bValue = bValue.toLowerCase();
+                }
+                
+                if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+                if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+                return 0;
+            });
+        }
+
+        // Хранилище сортировок для каждой подсети
+        const subnetSorts = new Map();
+
+        function sortSubnetTable(subnet, field) {
+            // Получаем или создаем объект сортировки для подсети
+            if (!subnetSorts.has(subnet)) {
+                subnetSorts.set(subnet, { field: 'name', direction: 'asc' });
+            }
+            
+            const subnetSort = subnetSorts.get(subnet);
+            
+            // Сбрасываем сортировку у всех заголовков таблицы подсети
+            document.querySelectorAll(`#subnet-table-body-${subnet.replace(/[^a-zA-Z0-9]/g, '_')} th`).forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+            });
+            
+            // Устанавливаем новую сортировку
+            if (subnetSort.field === field) {
+                subnetSort.direction = subnetSort.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                subnetSort.field = field;
+                subnetSort.direction = 'asc';
+            }
+            
+            // Обновляем иконку сортировки
+            const header = document.querySelector(`#subnet-table-body-${subnet.replace(/[^a-zA-Z0-9]/g, '_')} th[data-sort="${field}"]`);
+            if (header) {
+                header.classList.add(`sort-${subnetSort.direction}`);
+            }
+            
+            // Получаем устройства подсети и сортируем их
+            const devicesBySubnet = new Map();
+            devices.forEach(device => {
+                const deviceSubnet = getSubnet(device.ip);
+                if (!devicesBySubnet.has(deviceSubnet)) devicesBySubnet.set(deviceSubnet, []);
+                devicesBySubnet.get(deviceSubnet).push(device);
+            });
+            
+            const subnetDevices = devicesBySubnet.get(subnet) || [];
+            sortSubnetDevices(subnetDevices, subnetSort);
+            
+            // Обновляем таблицу
+            const tableBody = document.getElementById(`subnet-table-body-${subnet.replace(/[^a-zA-Z0-9]/g, '_')}`);
+            if (tableBody) {
+                tableBody.innerHTML = subnetDevices.map(device => _renderSubnetDeviceTableRow(device)).join('');
+            }
+        }
+
+        function sortSubnetDevices(devicesList, sortConfig) {
+            devicesList.sort((a, b) => {
+                let aValue, bValue;
+                
+                switch (sortConfig.field) {
+                    case 'name':
+                        aValue = a.name;
+                        bValue = b.name;
+                        break;
+                    case 'ip':
+                        // Сравниваем только IP-адреса без портов
+                        aValue = a.ip.split(':')[0];
+                        bValue = b.ip.split(':')[0];
+                        break;
+                    case 'status':
+                        aValue = a.status === 'online' ? 1 : 0;
+                        bValue = b.status === 'online' ? 1 : 0;
+                        break;
+                    case 'group':
+                        aValue = a.group_name || '';
+                        bValue = b.group_name || '';
+                        break;
+                    default:
+                        return 0;
+                }
+                
+                if (typeof aValue === 'string') {
+                    aValue = aValue.toLowerCase();
+                    bValue = bValue.toLowerCase();
+                }
+                
+                if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+                if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
                 return 0;
             });
         }
@@ -3128,15 +4053,92 @@
             }
         }
         
+        function showSubnetModal(subnet) {
+            const modal = document.getElementById('subnetModal');
+            
+            document.getElementById('subnetId').value = subnet || '';
+            document.getElementById('subnetRange').value = subnet || '';
+            document.getElementById('subnetName').value = subnetNames.has(subnet) ? subnetNames.get(subnet) : '';
+            
+            modal.classList.add('active');
+        }
+        
+        async function saveSubnet() {
+            const subnet = document.getElementById('subnetId').value.trim();
+            const name = document.getElementById('subnetName').value.trim();
+            
+            console.log('Saving subnet:', { subnet, name });
+            
+            if (!subnet) {
+                showNotification('Диапазон подсети не может быть пустым', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/subnet_names', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ subnet, name })
+                });
+                
+                console.log('Response status:', response.status);
+                console.log('Response ok:', response.ok);
+                
+                if (response.ok) {
+                    if (name) {
+                        // Обновляем локальное хранилище
+                        subnetNames.set(subnet, name);
+                        showNotification('Название подсети сохранено', 'success');
+                    } else {
+                        // Удаляем из локального хранилища
+                        subnetNames.delete(subnet);
+                        showNotification('Название подсети сброшено', 'success');
+                    }
+                    
+                    // Перерисовываем страницу подсетей
+                    if (currentPage === 'subnets') {
+                        renderSubnetsPage();
+                    }
+                    
+                    closeModal();
+                } else {
+                    const error = await response.json();
+                    console.error('Error response:', error);
+                    showNotification(error.error || 'Ошибка сохранения', 'error');
+                }
+            } catch (error) {
+                console.error('Ошибка сохранения названия подсети:', error);
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+        
+        // Загружаем названия подсетей из базы данных при инициализации
+        async function loadSubnetNames() {
+            try {
+                const response = await fetch('/api/subnet_names');
+                if (response.ok) {
+                    const data = await response.json();
+                    subnetNames = new Map(data.map(item => [item.subnet, item.name]));
+                }
+            } catch (error) {
+                console.error('Ошибка загрузки названий подсетей:', error);
+                subnetNames = new Map();
+            }
+        }
+        
         function showImportExportModal() {
             const modal = document.getElementById('importExportModal');
-            modal.classList.add('active');
-            switchTab('export');
+            if (modal) {
+                modal.classList.add('active');
+                switchTab('export');
+            }
         }
         
         function closeModal() {
             document.querySelectorAll('.modal-overlay').forEach(modal => {
-                modal.classList.remove('active');
+                if (modal && modal.classList) {
+                    modal.classList.remove('active');
+                }
             });
             editingDeviceId = null;
             editingDeviceType = null;
@@ -3205,9 +4207,295 @@
         }
 
         function showSettingsModal() {
-            const modal = document.getElementById('settingsModal');
-            modal.classList.add('active');
+            // Открываем настройки как отдельную страницу
+            try {
+                showPage('settings');
+            } catch (error) {
+                console.error('Ошибка открытия настроек:', error);
+                showNotification('Ошибка открытия настроек', 'error');
+            }
         }
+
+        async function loadSettings() {
+            try {
+                const response = await fetch('/api/settings');
+                const settings = await response.json();
+                
+                // Устанавливаем значения в форме с проверками
+                const themeSelect = document.getElementById('themeSelect');
+                if (themeSelect) themeSelect.value = settings.theme || 'light';
+                
+                const primaryColorInput = document.getElementById('primaryColorInput');
+                const primaryColorText = document.getElementById('primaryColorText');
+                if (primaryColorInput) primaryColorInput.value = settings.primary_color || '#4a6cf7';
+                if (primaryColorText) primaryColorText.value = settings.primary_color || '#4a6cf7';
+                
+                const appTitleInput = document.getElementById('appTitleInput');
+                if (appTitleInput) appTitleInput.value = settings.app_title || 'VNC Manager';
+                
+                // Если есть favicon, показываем превью
+                if (settings.favicon_path) {
+                    const faviconFileName = document.getElementById('faviconFileName');
+                    const faviconPreview = document.getElementById('faviconPreview');
+                    const faviconPreviewImg = document.getElementById('faviconPreviewImg');
+                    
+                    if (faviconFileName) faviconFileName.textContent = settings.favicon_path;
+                    if (faviconPreview) faviconPreview.style.display = 'block';
+                    if (faviconPreviewImg) faviconPreviewImg.src = settings.favicon_path;
+                }
+                
+                // Если есть логотип, показываем превью
+                if (settings.logo_path) {
+                    const logoFileName = document.getElementById('logoFileName');
+                    const logoPreview = document.getElementById('logoPreview');
+                    const logoPreviewImg = document.getElementById('logoPreviewImg');
+                    
+                    if (logoFileName) logoFileName.textContent = settings.logo_path;
+                    if (logoPreview) logoPreview.style.display = 'block';
+                    if (logoPreviewImg) logoPreviewImg.src = settings.logo_path;
+                }
+                
+            } catch (error) {
+                console.error('Ошибка загрузки настроек:', error);
+            }
+        }
+
+        async function saveSettings() {
+            try {
+                // Проверяем существование элементов перед получением значений
+                const themeSelect = document.getElementById('themeSelect');
+                const primaryColorInput = document.getElementById('primaryColorInput');
+                const appTitleInput = document.getElementById('appTitleInput');
+                
+                if (!themeSelect || !primaryColorInput || !appTitleInput) {
+                    showNotification('Форма настроек не найдена', 'error');
+                    return;
+                }
+                
+                const settings = {
+                    theme: themeSelect.value,
+                    primary_color: primaryColorInput.value,
+                    app_title: appTitleInput.value
+                };
+                
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(settings)
+                });
+                
+                if (response.ok) {
+                    // Применяем настройки немедленно
+                    applySettings(settings);
+                    showNotification('Настройки сохранены', 'success');
+                } else {
+                    showNotification('Ошибка сохранения настроек', 'error');
+                }
+                
+            } catch (error) {
+                console.error('Ошибка сохранения настроек:', error);
+                showNotification('Ошибка сохранения настроек', 'error');
+            }
+        }
+
+        function applySettings(settings) {
+            // Применяем тему
+            if (settings.theme) {
+                document.body.setAttribute('data-theme', settings.theme);
+                localStorage.setItem('theme', settings.theme);
+                updateThemeButton(settings.theme);
+            }
+            
+            // Применяем основной цвет
+            if (settings.primary_color) {
+                document.documentElement.style.setProperty('--primary', settings.primary_color);
+                // Пересчитываем производные цвета
+                const color = settings.primary_color;
+                const darkerColor = adjustColor(color, -20);
+                const lighterColor = hexToRgba(color, 0.1);
+                document.documentElement.style.setProperty('--primary-dark', darkerColor);
+                document.documentElement.style.setProperty('--primary-light', lighterColor);
+            }
+            
+            // Применяем название приложения
+            if (settings.app_title) {
+                document.title = settings.app_title;
+                const logoText = document.querySelector('.logo-text');
+                if (logoText) {
+                    logoText.textContent = settings.app_title;
+                }
+            }
+        }
+
+        function hexToRgba(hex, alpha) {
+            const r = parseInt(hex.slice(1, 3), 16);
+            const g = parseInt(hex.slice(3, 5), 16);
+            const b = parseInt(hex.slice(5, 7), 16);
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+
+        function adjustColor(hex, amount) {
+            const num = parseInt(hex.slice(1), 16);
+            const r = Math.max(0, Math.min(255, (num >> 16) + amount));
+            const g = Math.max(0, Math.min(255, ((num >> 8) & 0x00FF) + amount));
+            const b = Math.max(0, Math.min(255, (num & 0x0000FF) + amount));
+            return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, '0')}`;
+        }
+
+        // Обработчики для favicon
+        document.getElementById('faviconInput').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                // Показываем превью
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('faviconPreview').style.display = 'block';
+                    document.getElementById('faviconPreviewImg').src = e.target.result;
+                    document.getElementById('faviconFileName').textContent = file.name;
+                };
+                reader.readAsDataURL(file);
+                
+                // Загружаем на сервер
+                const formData = new FormData();
+                formData.append('favicon', file);
+                
+                try {
+                    const response = await fetch('/api/settings/upload_favicon', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        // Обновляем favicon на странице
+                        updateFavicon(result.path);
+                        showNotification('Favicon загружен', 'success');
+                    } else {
+                        showNotification('Ошибка загрузки favicon', 'error');
+                    }
+                } catch (error) {
+                    console.error('Ошибка загрузки favicon:', error);
+                    showNotification('Ошибка загрузки favicon', 'error');
+                }
+            }
+        });
+
+        function updateFavicon(path) {
+            // Удаляем существующие favicon
+            const existingFavicons = document.querySelectorAll('link[rel="icon"], link[rel="shortcut icon"]');
+            existingFavicons.forEach(favicon => favicon.remove());
+            
+            // Добавляем новый favicon
+            const link = document.createElement('link');
+            link.rel = 'icon';
+            link.href = path;
+            document.head.appendChild(link);
+        }
+
+        // Обработчики для логотипа
+        document.getElementById('logoInput').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (file) {
+                // Показываем превью
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    document.getElementById('logoPreview').style.display = 'block';
+                    document.getElementById('logoPreviewImg').src = e.target.result;
+                    document.getElementById('logoFileName').textContent = file.name;
+                };
+                reader.readAsDataURL(file);
+                
+                // Загружаем на сервер
+                const formData = new FormData();
+                formData.append('logo', file);
+                
+                try {
+                    const response = await fetch('/api/settings/upload_logo', {
+                        method: 'POST',
+                        body: formData
+                    });
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        // Обновляем логотип на странице
+                        updateLogo(result.path);
+                        showNotification('Логотип загружен', 'success');
+                    } else {
+                        showNotification('Ошибка загрузки логотипа', 'error');
+                    }
+                } catch (error) {
+                    console.error('Ошибка загрузки логотипа:', error);
+                    showNotification('Ошибка загрузки логотипа', 'error');
+                }
+            }
+        });
+
+        function updateLogo(path) {
+            const logoContainer = document.querySelector('.logo');
+            if (logoContainer) {
+                if (path && path.trim() !== '') {
+                    // Получаем текущее название приложения
+                    const currentTitle = document.querySelector('.logo-text')?.textContent || 'VNC Manager';
+                    
+                    // Заменяем содержимое логотипа на изображение + сохраняем название
+                    logoContainer.innerHTML = `
+                        <img src="${path}" alt="Logo" style="height: 32px; max-width: 120px; object-fit: contain; margin-right: 12px;">
+                        <div class="logo-text">${currentTitle}</div>
+                    `;
+                } else {
+                    // Восстанавливаем оригинальный логотип
+                    const currentTitle = document.title || 'VNC Manager';
+                    logoContainer.innerHTML = `
+                        <div class="logo-icon">
+                            <i class="fas fa-network-wired"></i>
+                        </div>
+                        <div class="logo-text">${currentTitle}</div>
+                    `;
+                }
+            }
+        }
+
+        async function resetLogo() {
+            try {
+                // Сбрасываем настройку в базе данных
+                const response = await fetch('/api/settings', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ logo_path: '' })
+                });
+                
+                if (response.ok) {
+                    // Обновляем интерфейс
+                    updateLogo('');
+                    document.getElementById('logoFileName').textContent = 'Файл не выбран';
+                    document.getElementById('logoPreview').style.display = 'none';
+                    document.getElementById('logoInput').value = '';
+                    
+                    showNotification('Логотип сброшен', 'success');
+                } else {
+                    showNotification('Ошибка сброса логотипа', 'error');
+                }
+            } catch (error) {
+                console.error('Ошибка сброса логотипа:', error);
+                showNotification('Ошибка сброса логотипа', 'error');
+            }
+        }
+
+        // Синхронизация цветовых инпутов
+        document.getElementById('primaryColorInput').addEventListener('input', function(e) {
+            document.getElementById('primaryColorText').value = e.target.value;
+        });
+
+        document.getElementById('primaryColorText').addEventListener('input', function(e) {
+            const value = e.target.value;
+            if (/^#[0-9A-F]{6}$/i.test(value)) {
+                document.getElementById('primaryColorInput').value = value;
+            }
+        });
 
         function openSelectiveClearModal() {
             _clearDbOptions = {
@@ -3225,6 +4513,92 @@
         
         function editGroup(id) {
             showGroupModal(id);
+        }
+
+        function editSubnet(subnet) {
+            // Показываем модальное окно редактирования подсети
+            showSubnetModal(subnet);
+        }
+
+        function getFreeIP(subnet) {
+            console.log('getFreeIP called for subnet:', subnet);
+            console.log('Current devices:', devices);
+            
+            // Извлекаем базовый IP из подсети
+            const baseIP = subnet.replace('/24', '');
+            const parts = baseIP.split('.');
+            
+            console.log('Base IP:', baseIP, 'Parts:', parts);
+            
+            if (parts.length !== 4) {
+                showNotification('Неверный формат подсети', 'error');
+                return;
+            }
+            
+            // Получаем все IP-адреса в этой подсети
+            const usedIPs = new Set();
+            devices.forEach(device => {
+                if (device.ip) {
+                    // Извлекаем только IP-адрес без порта
+                    const deviceIP = device.ip.split(':')[0];
+                    if (deviceIP.startsWith(`${parts[0]}.${parts[1]}.${parts[2]}.`)) {
+                        usedIPs.add(deviceIP);
+                    }
+                }
+            });
+            
+            console.log('Used IPs in subnet:', Array.from(usedIPs));
+            
+            // Ищем свободный IP (исключаем .0, .1, .255)
+            let freeIP = null;
+            for (let i = 2; i <= 254; i++) {
+                const testIP = `${parts[0]}.${parts[1]}.${parts[2]}.${i}`;
+                if (!usedIPs.has(testIP)) {
+                    freeIP = testIP;
+                    break;
+                }
+            }
+            
+            console.log('Found free IP:', freeIP);
+            
+            if (!freeIP) {
+                showNotification('Нет свободных IP-адресов в этой подсети', 'error');
+                return;
+            }
+            
+            // Открываем модальное окно добавления устройства с найденным IP
+            showDeviceModalWithIP(freeIP);
+        }
+        
+        function showDeviceModalWithIP(ip) {
+            // Открываем модальное окно добавления устройства с предзаполненным IP
+            const modal = document.getElementById('deviceModal');
+            const title = document.querySelector('#deviceModal .modal-title');
+            
+            // Сбрасываем форму
+            document.getElementById('deviceId').value = '';
+            document.getElementById('deviceName').value = '';
+            document.getElementById('devicePort').value = '5900';
+            document.getElementById('deviceGroup').value = '';
+            document.getElementById('deviceComment').value = '';
+            document.getElementById('deviceType').value = 'server';
+            document.getElementById('deviceWebInterface').value = '';
+            
+            // Устанавливаем найденный IP в соответствующее поле
+            document.getElementById('serverIp').value = ip;
+            document.getElementById('printerIp').value = ip;
+            
+            title.textContent = 'Добавить устройство';
+            modal.classList.add('active');
+            
+            // Показываем поля для сервера (по умолчанию)
+            document.getElementById('serverFields').style.display = 'block';
+            document.getElementById('printerFields').style.display = 'none';
+            
+            // Фокус на поле имени
+            setTimeout(() => {
+                document.getElementById('deviceName').focus();
+            }, 100);
         }
         
         async function deleteDevice(id, type) {
@@ -3521,6 +4895,41 @@
             }, 3000);
         }
         
+        function getSubnet(ip) {
+            if (!ip) return 'Неизвестная подсеть';
+            
+            try {
+                const parts = ip.split('.');
+                if (parts.length !== 4) return 'Неизвестная подсеть';
+                
+                // Определяем подсеть по первым трем октетам для /24 сети
+                // Или по первым двум октетам для /16 сети
+                // Или по первому октету для /8 сети
+                
+                // Для простоты используем /24 маску (255.255.255.0)
+                const subnet = `${parts[0]}.${parts[1]}.${parts[2]}.0/24`;
+                return subnet;
+            } catch (error) {
+                return 'Неизвестная подсеть';
+            }
+        }
+
+        function getSubnetName(subnet) {
+            if (!subnet || subnet === 'Неизвестная подсеть') return subnet;
+            
+            // Если есть пользовательское название, используем его
+            if (subnetNames.has(subnet)) {
+                return subnetNames.get(subnet);
+            }
+            
+            // Генерируем имя подсети на основе диапазона
+            if (subnet.includes('/24')) {
+                const base = subnet.replace('/24', '');
+                return `Подсеть ${base}`;
+            }
+            return subnet;
+        }
+
         function escapeHtml(text) {
             if (!text) return '';
             const div = document.createElement('div');

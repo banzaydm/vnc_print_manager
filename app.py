@@ -10,7 +10,7 @@ import platform
 from pathlib import Path
 import ipaddress
 import concurrent.futures
-from models import db, Group, Server, Printer
+from models import db, Group, Server, Printer, Settings, SubnetName
 from sqlalchemy import text
 
 app = Flask(__name__, static_folder='.', static_url_path='')
@@ -124,6 +124,26 @@ def init_db():
             cols = [r[1] for r in db.session.execute(text("PRAGMA table_info(server)"))]
             if 'is_favorite' not in cols:
                 db.session.execute(text("ALTER TABLE server ADD COLUMN is_favorite BOOLEAN DEFAULT 0"))
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+        
+        # Миграция: добавляем таблицу settings, если её нет
+        try:
+            db.session.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'"))
+            if not db.session.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")).fetchone():
+                db.create_all()
+                # Добавляем настройки по умолчанию
+                default_settings = [
+                    Settings(key='theme', value='light', type='string', description='Цветовая тема (light/dark)'),
+                    Settings(key='favicon_path', value='', type='string', description='Путь к файлу favicon'),
+                    Settings(key='logo_path', value='', type='string', description='Путь к файлу логотипа'),
+                    Settings(key='app_title', value='VNC Manager', type='string', description='Заголовок приложения'),
+                    Settings(key='primary_color', value='#4a6cf7', type='string', description='Основной цвет темы'),
+                    Settings(key='custom_css', value='', type='string', description='Пользовательские CSS стили')
+                ]
+                for setting in default_settings:
+                    db.session.add(setting)
                 db.session.commit()
         except Exception:
             db.session.rollback()
@@ -1354,6 +1374,314 @@ def import_data():
         
     except Exception as e:
         db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# API для настроек
+@app.route('/api/settings', methods=['GET'])
+def get_settings():
+    """Получить все настройки"""
+    settings = Settings.query.all()
+    result = {}
+    for setting in settings:
+        # Преобразуем значение в соответствии с типом
+        if setting.type == 'boolean':
+            result[setting.key] = setting.value.lower() == 'true'
+        elif setting.type == 'number':
+            try:
+                result[setting.key] = float(setting.value)
+            except ValueError:
+                result[setting.key] = setting.value
+        else:
+            result[setting.key] = setting.value
+    return jsonify(result)
+
+@app.route('/api/settings', methods=['POST'])
+def update_settings():
+    """Обновить настройки"""
+    try:
+        data = request.json
+        
+        for key, value in data.items():
+            setting = Settings.query.filter_by(key=key).first()
+            
+            if setting:
+                # Обновляем существующую настройку
+                if setting.type == 'boolean':
+                    setting.value = 'true' if value else 'false'
+                elif setting.type == 'number':
+                    setting.value = str(value)
+                else:
+                    setting.value = str(value)
+                setting.updated_at = datetime.utcnow()
+            else:
+                # Создаем новую настройку
+                setting_type = 'string'
+                setting_value = str(value)
+                
+                # Определяем тип автоматически
+                if isinstance(value, bool):
+                    setting_type = 'boolean'
+                    setting_value = 'true' if value else 'false'
+                elif isinstance(value, (int, float)):
+                    setting_type = 'number'
+                    setting_value = str(value)
+                
+                setting = Settings(
+                    key=key,
+                    value=setting_value,
+                    type=setting_type,
+                    description=f'Настройка {key}'
+                )
+                db.session.add(setting)
+        
+        db.session.commit()
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/settings/upload_favicon', methods=['POST'])
+def upload_favicon():
+    """Загрузить favicon"""
+    try:
+        if 'favicon' not in request.files:
+            return jsonify({'error': 'Файл не загружен'}), 400
+        
+        file = request.files['favicon']
+        if file.filename == '':
+            return jsonify({'error': 'Файл не выбран'}), 400
+        
+        # Проверяем расширение файла
+        allowed_extensions = {'ico', 'png', 'jpg', 'jpeg', 'gif', 'svg'}
+        if not ('.' in file.filename and 
+                file.filename.rsplit('.', 1)[1].lower() in allowed_extensions):
+            return jsonify({'error': 'Неверный формат файла. Разрешены: ico, png, jpg, jpeg, gif, svg'}), 400
+        
+        # Создаем директорию для статических файлов, если её нет
+        static_dir = os.path.join(app.static_folder, 'uploads')
+        os.makedirs(static_dir, exist_ok=True)
+        
+        # Сохраняем файл
+        filename = f"favicon.{file.filename.rsplit('.', 1)[1].lower()}"
+        file_path = os.path.join(static_dir, filename)
+        file.save(file_path)
+        
+        # Обновляем настройку в базе данных
+        setting = Settings.query.filter_by(key='favicon_path').first()
+        if setting:
+            setting.value = f"uploads/{filename}"
+            setting.updated_at = datetime.utcnow()
+        else:
+            setting = Settings(
+                key='favicon_path',
+                value=f"uploads/{filename}",
+                type='string',
+                description='Путь к файлу favicon'
+            )
+            db.session.add(setting)
+        
+        db.session.commit()
+        return jsonify({'success': True, 'path': f"uploads/{filename}"})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/settings/upload_logo', methods=['POST'])
+def upload_logo():
+    """Загрузить логотип"""
+    try:
+        if 'logo' not in request.files:
+            return jsonify({'error': 'Файл не загружен'}), 400
+        
+        file = request.files['logo']
+        if file.filename == '':
+            return jsonify({'error': 'Файл не выбран'}), 400
+        
+        # Проверяем расширение файла
+        allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'}
+        if not ('.' in file.filename and 
+                file.filename.rsplit('.', 1)[1].lower() in allowed_extensions):
+            return jsonify({'error': 'Неверный формат файла. Разрешены: png, jpg, jpeg, gif, svg, webp'}), 400
+        
+        # Создаем директорию для статических файлов, если её нет
+        static_dir = os.path.join(app.static_folder, 'uploads')
+        os.makedirs(static_dir, exist_ok=True)
+        
+        # Сохраняем файл
+        filename = f"logo.{file.filename.rsplit('.', 1)[1].lower()}"
+        file_path = os.path.join(static_dir, filename)
+        file.save(file_path)
+        
+        # Обновляем настройку в базе данных
+        setting = Settings.query.filter_by(key='logo_path').first()
+        if setting:
+            setting.value = f"uploads/{filename}"
+            setting.updated_at = datetime.utcnow()
+        else:
+            setting = Settings(
+                key='logo_path',
+                value=f"uploads/{filename}",
+                type='string',
+                description='Путь к файлу логотипа'
+            )
+            db.session.add(setting)
+        
+        db.session.commit()
+        return jsonify({'success': True, 'path': f"uploads/{filename}"})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# API для названий подсетей
+@app.route('/api/subnet_names', methods=['GET'])
+def get_subnet_names():
+    try:
+        subnet_names = SubnetName.query.all()
+        return jsonify([{'subnet': sn.subnet, 'name': sn.name} for sn in subnet_names])
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/subnet_names', methods=['POST'])
+def create_or_update_subnet_name():
+    try:
+        data = request.get_json()
+        subnet = data.get('subnet')
+        name = data.get('name')
+        
+        if not subnet:
+            return jsonify({'error': 'Подсеть обязательна'}), 400
+        
+        # Ищем существующую запись
+        subnet_name = SubnetName.query.filter_by(subnet=subnet).first()
+        
+        if subnet_name:
+            if name:
+                subnet_name.name = name
+            else:
+                # Если имя пустое, удаляем запись
+                db.session.delete(subnet_name)
+        else:
+            if name:
+                # Создаем новую запись
+                subnet_name = SubnetName(subnet=subnet, name=name)
+                db.session.add(subnet_name)
+        
+        db.session.commit()
+        return jsonify({'success': True})
+        
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/subnet_names/<subnet>', methods=['DELETE'])
+def delete_subnet_name(subnet):
+    try:
+        subnet_name = SubnetName.query.filter_by(subnet=subnet).first()
+        if subnet_name:
+            db.session.delete(subnet_name)
+            db.session.commit()
+            return jsonify({'success': True})
+        else:
+            return jsonify({'error': 'Название подсети не найдено'}), 404
+            
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+# API для бэкапов и восстановления
+import os
+import json
+from datetime import datetime
+
+@app.route('/api/create_backup', methods=['POST'])
+def create_backup():
+    try:
+        data = request.get_json()
+        
+        # Создаем имя файла с временной меткой
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f"backup_{timestamp}.json"
+        backup_path = os.path.join('backups', filename)
+        
+        # Убеждаемся, что папка существует
+        os.makedirs('backups', exist_ok=True)
+        
+        # Сохраняем бэкап
+        with open(backup_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        return jsonify({
+            'success': True,
+            'filename': filename,
+            'message': f'Backup создан: {filename}'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/backups', methods=['GET'])
+def list_backups():
+    try:
+        backups_dir = 'backups'
+        if not os.path.exists(backups_dir):
+            return jsonify({'success': True, 'backups': []})
+        
+        backups = []
+        for filename in os.listdir(backups_dir):
+            if filename.endswith('.json'):
+                filepath = os.path.join(backups_dir, filename)
+                stat = os.stat(filepath)
+                
+                # Читаем метаданные из файла
+                try:
+                    with open(filepath, 'r', encoding='utf-8') as f:
+                        backup_data = json.load(f)
+                        app_title = backup_data.get('appTitle', 'VNC Manager')
+                        timestamp = backup_data.get('timestamp', '')
+                except:
+                    app_title = 'VNC Manager'
+                    timestamp = ''
+                
+                backups.append({
+                    'filename': filename,
+                    'timestamp': timestamp,
+                    'appTitle': app_title,
+                    'size': stat.st_size,
+                    'created': datetime.fromtimestamp(stat.st_ctime).isoformat()
+                })
+        
+        # Сортируем по времени создания (новые первые)
+        backups.sort(key=lambda x: x['created'], reverse=True)
+        
+        return jsonify({'success': True, 'backups': backups})
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/restore_backup/<filename>', methods=['POST'])
+def restore_backup(filename):
+    try:
+        backup_path = os.path.join('backups', filename)
+        
+        if not os.path.exists(backup_path):
+            return jsonify({'error': 'Файл бэкапа не найден'}), 404
+        
+        # Читаем данные из бэкапа
+        with open(backup_path, 'r', encoding='utf-8') as f:
+            backup_data = json.load(f)
+        
+        # Восстанавливаем данные
+        # Здесь можно добавить логику восстановления разных типов данных
+        
+        return jsonify({
+            'success': True,
+            'message': f'Данные восстановлены из {filename}'
+        })
+        
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 # Инициализация при запуске

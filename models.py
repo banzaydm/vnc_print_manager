@@ -42,3 +42,24 @@ class Printer(db.Model):
     
     def __repr__(self):
         return f'<Printer {self.name} ({self.ip})>'
+
+class Settings(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    key = db.Column(db.String(50), unique=True, nullable=False)
+    value = db.Column(db.Text, nullable=True)
+    type = db.Column(db.String(20), default='string')  # string, json, boolean, number
+    description = db.Column(db.String(200), nullable=True)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f'<Settings {self.key}={self.value}>'
+
+class SubnetName(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    subnet = db.Column(db.String(18), unique=True, nullable=False)  # Например: 192.168.1.0/24
+    name = db.Column(db.String(100), nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    def __repr__(self):
+        return f'<SubnetName {self.subnet}={self.name}>'
