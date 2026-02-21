@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>VNC Manager</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
@@ -1403,6 +1406,35 @@
                             </button>
                         </div>
 
+                        <!-- Информация о версии приложения -->
+                        <div style="margin-top: 30px; padding: 20px; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 8px;">
+                            <h3 style="margin-bottom: 16px; color: var(--text-primary); font-size: 16px;">
+                                <i class="fas fa-info-circle" style="margin-right: 8px;"></i>
+                                О приложении
+                            </h3>
+                            <div style="font-size: 13px; color: var(--text-secondary); line-height: 1.6;">
+                                <div style="margin-bottom: 8px; display: flex; align-items: center;">
+                                    <i class="fas fa-code-branch" style="width: 20px; margin-right: 8px; color: var(--primary);"></i>
+                                    <span>Версия: <strong id="appVersionDisplay" style="color: var(--text-primary);">${APP_VERSION}</strong></span>
+                                </div>
+                                <div style="margin-bottom: 8px; display: flex; align-items: center;">
+                                    <i class="fas fa-calendar" style="width: 20px; margin-right: 8px; color: var(--primary);"></i>
+                                    <span>Дата обновления: <strong style="color: var(--text-primary);">${APP_VERSION_DATE}</strong></span>
+                                </div>
+                                <div style="margin-bottom: 8px; display: flex; align-items: center;">
+                                    <i class="fas fa-rocket" style="width: 20px; margin-right: 8px; color: var(--success);"></i>
+                                    <a href="https://github.com/banzaydm/vnc_print_manager" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 500;" onmouseover="this.style.textDecoration='underline'" onmouseout="this.style.textDecoration='none'">
+                                        GitHub проекта
+                                        <i class="fas fa-external-link-alt" style="margin-left: 4px; font-size: 11px;"></i>
+                                    </a>
+                                </div>
+                                <div style="display: flex; align-items: center;">
+                                    <i class="fas fa-code" style="width: 20px; margin-right: 8px; color: var(--info);"></i>
+                                    <span>Открытый исходный код</span>
+                                </div>
+                            </div>
+                        </div>
+
                         <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--card-border);">
                             <button class="btn btn-primary" onclick="saveSettings()">
                                 <i class="fas fa-save"></i>
@@ -1642,6 +1674,23 @@
                     </div>
                 </div>
                 <div class="form-group">
+                    <label class="form-label">Управление бэкапами</label>
+                    <div style="display: flex; gap: 8px; margin-bottom: 12px;">
+                        <button class="btn btn-sm" onclick="selectAllBackups(true)">
+                            <i class="fas fa-check-square"></i>
+                            <span>Выбрать все</span>
+                        </button>
+                        <button class="btn btn-sm" onclick="selectAllBackups(false)">
+                            <i class="fas fa-square"></i>
+                            <span>Снять выделение</span>
+                        </button>
+                        <button class="btn btn-sm btn-danger" onclick="deleteSelectedBackups()" style="margin-left: auto;">
+                            <i class="fas fa-trash"></i>
+                            <span>Удалить выбранные</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="form-group">
                     <small style="color: var(--error); font-weight: 500;">
                         <i class="fas fa-exclamation-triangle"></i>
                         Внимание: Восстановление заменит все текущие данные!
@@ -1650,6 +1699,7 @@
             </div>
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="restoreSelectedBackup()">Восстановить</button>
             </div>
         </div>
     </div>
@@ -1856,6 +1906,18 @@
     </div>
 
     <script>
+        // Версия приложения
+        const APP_VERSION = '1.0.2';
+        const APP_VERSION_DATE = '21.02.2026';
+        
+        // Функция обновления информации о версии в интерфейсе
+        function updateVersionDisplay() {
+            const versionDisplay = document.getElementById('appVersionDisplay');
+            if (versionDisplay) {
+                versionDisplay.textContent = APP_VERSION;
+            }
+        }
+        
         // Глобальные переменные
         let currentPage = 'favorites';
         let devices = [];
@@ -1873,6 +1935,9 @@
         
         // Инициализация при загрузке
         document.addEventListener('DOMContentLoaded', async function() {
+            // Обновляем отображение версии
+            updateVersionDisplay();
+            
             // Загружаем настройки
             loadAndApplySettings();
             
@@ -2102,6 +2167,62 @@
             }
         }
         
+        // Быстрая функция обновления только устройств (без групп и настроек)
+        async function quickRefreshDevices() {
+            await loadDevices();
+            // Обновляем текущую страницу
+            if (currentPage === 'groups') {
+                renderGroupsPage();
+            } else if (currentPage === 'subnets') {
+                renderSubnetsPage();
+            } else if (currentPage === 'all') {
+                renderAllGroupsPage();
+            } else {
+                renderDevices();
+            }
+        }
+        
+        // Функция немедленного обновления интерфейса (оптимистичное обновление)
+        function immediateUIUpdate(action, deviceData, type) {
+            if (action === 'add') {
+                // Добавляем устройство в локальный массив немедленно
+                const newDevice = {
+                    ...deviceData,
+                    id: 'temp_' + Date.now(), // Временный ID
+                    type: type,
+                    typeIcon: type === 'server' ? 'fa-server' : 'fa-print',
+                    typeText: type === 'server' ? 'Сервер' : 'Принтер'
+                };
+                devices.push(newDevice);
+            } else if (action === 'update') {
+                // Обновляем устройство в локальном массиве
+                const index = devices.findIndex(d => d.id === editingDeviceId && d.type === editingDeviceType);
+                if (index !== -1) {
+                    devices[index] = {
+                        ...devices[index],
+                        ...deviceData
+                    };
+                }
+            } else if (action === 'delete') {
+                // Удаляем устройство из локального массива
+                const index = devices.findIndex(d => d.id === arguments[2] && d.type === arguments[3]);
+                if (index !== -1) {
+                    devices.splice(index, 1);
+                }
+            }
+            
+            // Немедленно обновляем интерфейс
+            if (currentPage === 'groups') {
+                renderGroupsPage();
+            } else if (currentPage === 'subnets') {
+                renderSubnetsPage();
+            } else if (currentPage === 'all') {
+                renderAllGroupsPage();
+            } else {
+                renderDevices();
+            }
+        }
+        
         function updateGroupFilters() {
             const groupFilter = document.getElementById('groupFilter');
             const groupFilterLabel = document.getElementById('groupFilterLabel');
@@ -2303,6 +2424,16 @@
             document.getElementById('subnetsContainer').style.display = 'none';
             document.getElementById('scanContainer').style.display = 'none';
             document.getElementById('settingsContainer').style.display = 'none';
+            
+            // Дополнительная очистка для гарантии
+            if (page !== 'groups') {
+                const groupsContainer = document.getElementById('groupsContainer');
+                if (groupsContainer) groupsContainer.style.display = 'none';
+            }
+            if (page !== 'subnets') {
+                const subnetsContainer = document.getElementById('subnetsContainer');
+                if (subnetsContainer) subnetsContainer.style.display = 'none';
+            }
             
             if (page === 'groups') {
                 // Показываем страницу групп
@@ -2589,9 +2720,27 @@
                     throw new Error(data.error || 'Ошибка добавления устройства');
                 }
 
+                // Немедленно обновляем интерфейс
+                immediateUIUpdate('add', payload, type);
                 showNotification('Устройство добавлено', 'success');
-                await loadData();
-                displayScanResults(); // Обновляем отображение результатов сканирования
+                
+                // Обновляем результаты сканирования
+                displayScanResults();
+                
+                // Фоновая синхронизация для получения актуальных данных
+                setTimeout(async () => {
+                    await loadDevices();
+                    // Повторное обновление интерфейса с серверными данными
+                    if (currentPage === 'groups') {
+                        renderGroupsPage();
+                    } else if (currentPage === 'subnets') {
+                        renderSubnetsPage();
+                    } else if (currentPage === 'all') {
+                        renderAllGroupsPage();
+                    } else {
+                        renderDevices();
+                    }
+                }, 100);
             } catch (error) {
                 console.error('Ошибка добавления устройства:', error);
                 showNotification(error?.message || 'Ошибка добавления устройства', 'error');
@@ -3036,9 +3185,54 @@
         }
 
         function createBackup() {
+            // Показываем модальное окно для создания бэкапа с комментарием
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay';
+            modal.id = 'createBackupModal';
+            modal.innerHTML = `
+                <div class="modal">
+                    <div class="modal-header">
+                        <h3 class="modal-title">Создание Backup</h3>
+                        <button class="modal-close" onclick="closeCreateBackupModal()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <div class="form-group">
+                            <label class="form-label">Комментарий к бэкапу</label>
+                            <textarea id="backupComment" class="form-input form-textarea" placeholder="Опишите изменения или цель бэкапа..." rows="3"></textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn" onclick="closeCreateBackupModal()">Отмена</button>
+                        <button class="btn btn-primary" onclick="confirmCreateBackup()">
+                            <i class="fas fa-download"></i>
+                            <span>Создать Backup</span>
+                        </button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            modal.classList.add('active');
+            
+            // Фокус на поле комментария
+            setTimeout(() => {
+                document.getElementById('backupComment').focus();
+            }, 100);
+        }
+        
+        function closeCreateBackupModal() {
+            const modal = document.getElementById('createBackupModal');
+            if (modal) {
+                modal.remove();
+            }
+        }
+        
+        function confirmCreateBackup() {
+            const comment = document.getElementById('backupComment').value.trim();
+            
             // Создаем бэкап всех данных
             const backupData = {
                 timestamp: new Date().toISOString(),
+                comment: comment,
                 appTitle: document.title,
                 theme: document.body.getAttribute('data-theme'),
                 devices: devices,
@@ -3048,6 +3242,8 @@
                     // Здесь можно добавить другие настройки
                 }
             };
+            
+            closeCreateBackupModal();
             
             // Отправляем на сервер для сохранения
             fetch('/api/create_backup', {
@@ -3096,9 +3292,13 @@
                     
                     const backupHtml = data.backups.map(backup => `
                         <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid var(--card-border);">
-                            <div>
-                                <div style="font-weight: 500;">${new Date(backup.timestamp).toLocaleString('ru-RU')}</div>
-                                <div style="font-size: 12px; opacity: 0.7;">${backup.appTitle || 'VNC Manager'}</div>
+                            <div style="display: flex; align-items: center; flex: 1;">
+                                <input type="checkbox" class="backup-checkbox" data-filename="${backup.filename}" style="margin-right: 8px;">
+                                <div>
+                                    <div style="font-weight: 500;">${new Date(backup.timestamp).toLocaleString('ru-RU')}</div>
+                                    <div style="font-size: 12px; opacity: 0.7;">${backup.appTitle || 'VNC Manager'}</div>
+                                    ${backup.comment ? `<div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">${backup.comment}</div>` : ''}
+                                </div>
                             </div>
                             <button class="btn btn-sm" onclick="restoreFromBackup('${backup.filename}')">
                                 <i class="fas fa-history"></i>
@@ -3118,6 +3318,57 @@
             .catch(error => {
                 console.error('Error loading backups:', error);
             });
+        }
+        
+        function selectAllBackups(select) {
+            const checkboxes = document.querySelectorAll('.backup-checkbox');
+            checkboxes.forEach(checkbox => {
+                checkbox.checked = select;
+            });
+        }
+        
+        function deleteSelectedBackups() {
+            const selectedCheckboxes = document.querySelectorAll('.backup-checkbox:checked');
+            if (selectedCheckboxes.length === 0) {
+                showNotification('Выберите бэкапы для удаления', 'error');
+                return;
+            }
+            
+            if (!confirm(`Удалить ${selectedCheckboxes.length} выбранных бэкапов?`)) {
+                return;
+            }
+            
+            const filenames = Array.from(selectedCheckboxes).map(cb => cb.dataset.filename);
+            
+            fetch('/api/delete_backups', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ filenames })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    showNotification(`Удалено ${filenames.length} бэкапов`, 'success');
+                    // Обновляем список (один раз для обоих контейнеров)
+                    loadBackupList();
+                } else {
+                    showNotification('Ошибка удаления бэкапов', 'error');
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting backups:', error);
+                showNotification('Ошибка соединения', 'error');
+            });
+        }
+        
+        function restoreSelectedBackup() {
+            const selectedCheckbox = document.querySelector('.backup-checkbox:checked');
+            if (!selectedCheckbox) {
+                showNotification('Выберите бэкап для восстановления', 'error');
+                return;
+            }
+            
+            restoreFromBackup(selectedCheckbox.dataset.filename);
         }
 
         function restoreFromBackup(filename) {
@@ -3139,10 +3390,12 @@
                         // Обновляем текущую страницу
                         if (currentPage === 'settings') {
                             renderSettingsPage();
+                        } else {
+                            renderDevices();
                         }
                     });
                 } else {
-                    showNotification('Ошибка восстановления', 'error');
+                    showNotification(data.message || 'Ошибка восстановления данных', 'warning');
                 }
             })
             .catch(error => {
@@ -3963,14 +4216,27 @@
                 const result = await response.json();
                 
                 if (response.ok) {
+                    // Немедленно обновляем интерфейс перед показом уведомления
+                    const action = editingDeviceId ? 'update' : 'add';
+                    immediateUIUpdate(action, data, type);
+                    
                     showNotification(editingDeviceId ? 'Устройство обновлено' : 'Устройство добавлено', 'success');
                     closeModal();
-                    await loadData();
-                    if (currentPage === 'groups') {
-                        renderGroupsPage();
-                    } else {
-                        renderDevices();
-                    }
+                    
+                    // Фоновая синхронизация с сервером для получения актуальных данных
+                    setTimeout(async () => {
+                        await loadDevices();
+                        // Повторное обновление интерфейса с серверными данными
+                        if (currentPage === 'groups') {
+                            renderGroupsPage();
+                        } else if (currentPage === 'subnets') {
+                            renderSubnetsPage();
+                        } else if (currentPage === 'all') {
+                            renderAllGroupsPage();
+                        } else {
+                            renderDevices();
+                        }
+                    }, 100);
                 } else {
                     showNotification(result.error || 'Ошибка сохранения', 'error');
                 }
@@ -4044,6 +4310,8 @@
                     await loadData();
                     if (currentPage === 'groups') {
                         renderGroupsPage();
+                    } else if (currentPage === 'subnets') {
+                        renderSubnetsPage();
                     }
                 } else {
                     showNotification('Ошибка сохранения группы', 'error');
@@ -4521,14 +4789,9 @@
         }
 
         function getFreeIP(subnet) {
-            console.log('getFreeIP called for subnet:', subnet);
-            console.log('Current devices:', devices);
-            
             // Извлекаем базовый IP из подсети
             const baseIP = subnet.replace('/24', '');
             const parts = baseIP.split('.');
-            
-            console.log('Base IP:', baseIP, 'Parts:', parts);
             
             if (parts.length !== 4) {
                 showNotification('Неверный формат подсети', 'error');
@@ -4547,8 +4810,6 @@
                 }
             });
             
-            console.log('Used IPs in subnet:', Array.from(usedIPs));
-            
             // Ищем свободный IP (исключаем .0, .1, .255)
             let freeIP = null;
             for (let i = 2; i <= 254; i++) {
@@ -4559,12 +4820,12 @@
                 }
             }
             
-            console.log('Found free IP:', freeIP);
-            
             if (!freeIP) {
                 showNotification('Нет свободных IP-адресов в этой подсети', 'error');
                 return;
             }
+            
+            showNotification(`Найден свободный IP: ${freeIP}`, 'success');
             
             // Открываем модальное окно добавления устройства с найденным IP
             showDeviceModalWithIP(freeIP);
@@ -4574,15 +4835,16 @@
             // Открываем модальное окно добавления устройства с предзаполненным IP
             const modal = document.getElementById('deviceModal');
             const title = document.querySelector('#deviceModal .modal-title');
+            const form = document.getElementById('deviceForm');
             
             // Сбрасываем форму
-            document.getElementById('deviceId').value = '';
-            document.getElementById('deviceName').value = '';
-            document.getElementById('devicePort').value = '5900';
-            document.getElementById('deviceGroup').value = '';
-            document.getElementById('deviceComment').value = '';
+            form.reset();
+            
+            // Устанавливаем значения по умолчанию
             document.getElementById('deviceType').value = 'server';
-            document.getElementById('deviceWebInterface').value = '';
+            
+            // Вызываем обработчик изменения типа для правильного отображения полей
+            document.getElementById('deviceType').dispatchEvent(new Event('change'));
             
             // Устанавливаем найденный IP в соответствующее поле
             document.getElementById('serverIp').value = ip;
@@ -4605,22 +4867,39 @@
             if (!confirm(`Удалить этот ${type === 'server' ? 'сервер' : 'принтер'}?`)) return;
             
             try {
+                // Немедленно обновляем интерфейс
+                immediateUIUpdate('delete', null, null, id, type);
+                showNotification('Устройство удалено', 'success');
+                
+                // Отправляем запрос на сервер в фоне
                 const endpoint = type === 'server' ? '/api/servers' : '/api/printers';
                 const response = await fetch(`${endpoint}/${id}`, {
                     method: 'DELETE'
                 });
                 
-                if (response.ok) {
-                    showNotification('Устройство удалено', 'success');
-                    await loadData();
-                    if (currentPage === 'groups') {
-                        renderGroupsPage();
-                    } else {
-                        renderDevices();
-                    }
+                if (!response.ok) {
+                    // Если сервер вернул ошибку, откатываем изменения
+                    showNotification('Ошибка удаления, восстанавливаем данные...', 'error');
+                    await quickRefreshDevices();
+                } else {
+                    // Фоновая синхронизация для подтверждения
+                    setTimeout(async () => {
+                        await loadDevices();
+                        // Повторное обновление интерфейса с серверными данными
+                        if (currentPage === 'groups') {
+                            renderGroupsPage();
+                        } else if (currentPage === 'subnets') {
+                            renderSubnetsPage();
+                        } else if (currentPage === 'all') {
+                            renderAllGroupsPage();
+                        } else {
+                            renderDevices();
+                        }
+                    }, 100);
                 }
             } catch (error) {
-                showNotification('Ошибка удаления', 'error');
+                showNotification('Ошибка удаления, восстанавливаем данные...', 'error');
+                await quickRefreshDevices();
             }
         }
         
@@ -4637,6 +4916,8 @@
                     await loadData();
                     if (currentPage === 'groups') {
                         renderGroupsPage();
+                    } else if (currentPage === 'subnets') {
+                        renderSubnetsPage();
                     }
                 }
             } catch (error) {

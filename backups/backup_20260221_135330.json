@@ -1,7 +1,8 @@
 {
-  "timestamp": "2026-02-20T17:05:11.873Z",
+  "timestamp": "2026-02-21T10:53:30.314Z",
+  "comment": "релиз",
   "appTitle": "VNC Manager",
-  "theme": "dark",
+  "theme": "light",
   "devices": [
     {
       "comment": "Найдено автоматически в сети",
@@ -89,6 +90,57 @@
       "typeText": "Сервер"
     },
     {
+      "comment": "",
+      "created_at": "2026-02-21T10:24:08.085815",
+      "group_color": "#f39c12",
+      "group_id": 4,
+      "group_name": "Домашняя",
+      "id": 14,
+      "ip": "192.168.1.3",
+      "is_favorite": false,
+      "last_seen": null,
+      "name": "ннн555",
+      "port": 5900,
+      "status": "offline",
+      "type": "server",
+      "typeIcon": "fa-server",
+      "typeText": "Сервер"
+    },
+    {
+      "comment": "",
+      "created_at": "2026-02-21T10:51:51.873338",
+      "group_color": "#f39c12",
+      "group_id": 4,
+      "group_name": "Домашняя",
+      "id": 16,
+      "ip": "192.168.1.26",
+      "is_favorite": false,
+      "last_seen": null,
+      "name": "ннннннн",
+      "port": 5900,
+      "status": "offline",
+      "type": "server",
+      "typeIcon": "fa-server",
+      "typeText": "Сервер"
+    },
+    {
+      "comment": "",
+      "created_at": "2026-02-21T10:38:15.336843",
+      "group_color": "#2ecc71",
+      "group_id": 3,
+      "group_name": "Производство",
+      "id": 15,
+      "ip": "192.168.1.4",
+      "is_favorite": false,
+      "last_seen": null,
+      "name": "новый",
+      "port": 5900,
+      "status": "offline",
+      "type": "server",
+      "typeIcon": "fa-server",
+      "typeText": "Сервер"
+    },
+    {
       "comment": "Найдено автоматически в сети",
       "created_at": "2026-02-19T11:22:21.170218",
       "group_color": "#f39c12",
@@ -97,9 +149,25 @@
       "id": 4,
       "ip": "192.168.17.240",
       "is_favorite": true,
-      "name": "HP LaserJet CP 1025nw   192.168.17.240",
+      "name": "HP LaserJet CP 1025nw",
       "status": "offline",
       "web_interface": "http://192.168.17.240:80",
+      "type": "printer",
+      "typeIcon": "fa-print",
+      "typeText": "Принтер"
+    },
+    {
+      "comment": "Найдено автоматически в сети",
+      "created_at": "2026-02-20T17:53:38.901608",
+      "group_color": "#f39c12",
+      "group_id": 4,
+      "group_name": "Домашняя",
+      "id": 5,
+      "ip": "192.168.17.1",
+      "is_favorite": false,
+      "name": "KeeneticOS Web Panel",
+      "status": "online",
+      "web_interface": "http://192.168.17.1:80",
       "type": "printer",
       "typeIcon": "fa-print",
       "typeText": "Принтер"
@@ -159,8 +227,9 @@
       "id": 4,
       "name": "Домашняя",
       "parent_id": null,
-      "printers_count": 2,
-      "servers_count": 2
+      "printers_count": 3,
+      "servers_count": 5,
+      "children": []
     },
     {
       "color": "#e74c3c",
@@ -168,7 +237,8 @@
       "name": "Принтеры",
       "parent_id": null,
       "printers_count": 1,
-      "servers_count": 0
+      "servers_count": 1,
+      "children": []
     },
     {
       "color": "#2ecc71",
@@ -176,7 +246,8 @@
       "name": "Производство",
       "parent_id": null,
       "printers_count": 0,
-      "servers_count": 1
+      "servers_count": 2,
+      "children": []
     },
     {
       "color": "#3498db",
@@ -184,7 +255,8 @@
       "name": "Серверы отдела",
       "parent_id": null,
       "printers_count": 0,
-      "servers_count": 2
+      "servers_count": 2,
+      "children": []
     },
     {
       "color": "#9b59b6",
@@ -192,13 +264,14 @@
       "name": "Склад",
       "parent_id": null,
       "printers_count": 1,
-      "servers_count": 0
+      "servers_count": 0,
+      "children": []
     }
   ],
   "subnetNames": [
     [
       "192.168.1.0/24",
-      "авпв"
+      "Домашняя"
     ]
   ],
   "settings": {}

@@ -1641,14 +1641,17 @@ def list_backups():
                         backup_data = json.load(f)
                         app_title = backup_data.get('appTitle', 'VNC Manager')
                         timestamp = backup_data.get('timestamp', '')
+                        comment = backup_data.get('comment', '')
                 except:
                     app_title = 'VNC Manager'
                     timestamp = ''
+                    comment = ''
                 
                 backups.append({
                     'filename': filename,
                     'timestamp': timestamp,
                     'appTitle': app_title,
+                    'comment': comment,
                     'size': stat.st_size,
                     'created': datetime.fromtimestamp(stat.st_ctime).isoformat()
                 })
@@ -1679,6 +1682,38 @@ def restore_backup(filename):
         return jsonify({
             'success': True,
             'message': f'Данные восстановлены из {filename}'
+        })
+        
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/delete_backups', methods=['POST'])
+def delete_backups():
+    try:
+        data = request.get_json()
+        filenames = data.get('filenames', [])
+        
+        if not filenames:
+            return jsonify({'error': 'Не указаны файлы для удаления'}), 400
+        
+        deleted_count = 0
+        errors = []
+        
+        for filename in filenames:
+            backup_path = os.path.join('backups', filename)
+            try:
+                if os.path.exists(backup_path):
+                    os.remove(backup_path)
+                    deleted_count += 1
+                else:
+                    errors.append(f'Файл {filename} не найден')
+            except Exception as e:
+                errors.append(f'Ошибка удаления {filename}: {str(e)}')
+        
+        return jsonify({
+            'success': True,
+            'deleted_count': deleted_count,
+            'errors': errors
         })
         
     except Exception as e:
