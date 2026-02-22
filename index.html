@@ -837,7 +837,7 @@
             display: flex;
             gap: 4px;
             margin-left: 12px;
-            opacity: 0;
+            opacity: 0.8;
             transition: opacity 0.2s;
             flex-shrink: 0;
         }
@@ -1620,6 +1620,40 @@
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal()">Отмена</button>
                 <button class="btn" onclick="saveGroup()">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно группы -->
+    <div id="groupModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Добавить группу</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="groupId">
+                <div class="form-group">
+                    <label for="groupName">Название группы:</label>
+                    <input type="text" id="groupName" placeholder="Введите название группы">
+                </div>
+                <div class="form-group">
+                    <label for="groupColor">Цвет группы:</label>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <input type="color" id="groupColor" value="#3498db">
+                        <div id="colorPreview" style="width: 30px; height: 30px; border: 1px solid #ccc; border-radius: 4px; background: #3498db;"></div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="parentGroup">Родительская группа:</label>
+                    <select id="parentGroup">
+                        <option value="">Без родительской группы</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-primary" onclick="saveGroup()">Сохранить</button>
+                <button class="btn" onclick="closeModal()">Отмена</button>
             </div>
         </div>
     </div>
@@ -3850,25 +3884,29 @@
         }
 
         async function clearDbConfirm() {
+            console.log('clearDbConfirm called with options:', _clearDbOptions);
             try {
+                const requestData = { confirm: 'CLEAR', confirm2: 'CLEAR', ..._clearDbOptions };
+                console.log('Sending to /api/admin/clear_db:', requestData);
+                
                 const response = await fetch('/api/admin/clear_db', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ confirm: 'CLEAR', confirm2: 'CLEAR', ..._clearDbOptions })
+                    body: JSON.stringify(requestData)
                 });
 
+                console.log('Response status:', response.status);
                 const data = await safeJson(response);
-                if (!response.ok) {
-                    if (response.status === 405) {
-                        throw new Error('405 Method Not Allowed: POST /api/admin/clear_db');
-                    }
+                console.log('Response data:', data);
+                
+                if (data.success) {
+                    closeModal();
+                    showNotification('База очищена', 'success');
+                    await loadData();
+                    showPage('favorites');
+                } else {
                     throw new Error(data.error || 'Ошибка очистки базы');
                 }
-
-                closeModal();
-                showNotification('База очищена', 'success');
-                await loadData();
-                showPage('favorites');
             } catch (error) {
                 console.error('Ошибка очистки БД:', error);
                 showNotification(error?.message ? `Ошибка очистки базы: ${error.message}` : 'Ошибка очистки базы', 'error');
@@ -3880,6 +3918,13 @@
         }
         
         function renderGroupsPage() {
+            console.log('renderGroupsPage called');
+            console.log('Checking function availability:');
+            console.log('window.editGroup:', typeof window.editGroup);
+            console.log('window.deleteGroup:', typeof window.deleteGroup);
+            console.log('window.moveGroup:', typeof window.moveGroup);
+            console.log('window.showAddSubgroupModal:', typeof window.showAddSubgroupModal);
+            
             const treeContainer = document.getElementById('groupsTree');
             const emptyState = document.getElementById('groupsEmpty');
             
@@ -3908,107 +3953,158 @@
             });
             
             // Рендерим дерево
-            treeContainer.innerHTML = '';
-            rootGroups.forEach(group => {
-                treeContainer.appendChild(renderGroupNode(group));
+            const renderGroup = (group, level = 0) => {
+                const hasChildren = group.children && group.children.length > 0;
+                const isExpanded = expandedGroups.has(group.id);
+                
+                const groupDevices = devices.filter(d => d.group_id === group.id);
+                const hasContent = hasChildren || groupDevices.length > 0;
+                
+                const groupHtml = `
+                    <div class="tree-item">
+                        <div class="tree-header" onclick="toggleGroup(${group.id})">
+                            ${hasContent ? `
+                                <div class="tree-toggle ${isExpanded ? 'rotated' : ''}">
+                                    <i class="fas fa-chevron-right"></i>
+                                </div>
+                            ` : '<div class="tree-toggle" style="visibility: hidden;"><i class="fas fa-chevron-right"></i></div>'}
+                            
+                            <div class="tree-color" style="background: ${group.color}"></div>
+                            <div class="tree-name">${escapeHtml(group.name)}</div>
+                            <div class="tree-stats">
+                                ${group.servers_count || 0} серверов, ${group.printers_count || 0} принтеров
+                            </div>
+                            <div class="tree-actions">
+                                <button class="action-btn" data-action="add-subgroup" data-group-id="${group.id}" title="Добавить подгруппу">
+                                    <i class="fas fa-folder-plus"></i>
+                                </button>
+                                <button class="action-btn" data-action="move-group" data-group-id="${group.id}" title="Переместить группу">
+                                    <i class="fas fa-arrows-alt"></i>
+                                </button>
+                                <button class="action-btn" data-action="edit-group" data-group-id="${group.id}">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button class="action-btn action-delete" data-action="delete-group" data-group-id="${group.id}">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                        ${hasContent ? `
+                            <div class="tree-content ${isExpanded ? 'expanded' : ''}" id="group-content-${group.id}">
+                                <div style="padding: 6px 0 6px 34px;">
+                                    ${groupDevices.map(d => `
+                                        <div style="display:flex; align-items:center; gap:10px; padding:2px 0;">
+                                            <div class="type-icon ${d.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 24px; height: 24px;">
+                                                <i class="fas ${d.type === 'server' ? 'fa-server' : 'fa-print'}"></i>
+                                            </div>
+                                            <div style="flex:1; min-width:0;">
+                                                <div style="display:flex; align-items:center; gap:6px;">
+                                                    <span style="font-weight:600; font-size:13px;">${escapeHtml(d.name)}</span>
+                                                    <button class="favorite-btn ${d.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${d.id}, &quot;${d.type}&quot;, ${d.is_favorite ? 'false' : 'true'})"><i class="fas fa-star"></i></button>
+                                                </div>
+                                                <div style="font-size:12px; opacity:0.75;">${escapeHtml(d.ip)}${d.port ? `:${d.port}` : ''}</div>
+                                            </div>
+                                            <div class="device-actions" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
+                                                <button class="action-btn" onclick="event.stopPropagation(); showMoveDeviceModal(${d.id}, &quot;${d.type}&quot;, ${group.id})">
+                                                    <i class="fas fa-arrows-alt"></i>
+                                                    <span>Переместить</span>
+                                                </button>
+                                                <button class="action-btn" onclick="event.stopPropagation(); editDevice(${d.id}, &quot;${d.type}&quot;)">
+                                                    <i class="fas fa-edit"></i>
+                                                    <span>Изменить</span>
+                                                </button>
+                                                <button class="action-btn action-delete" onclick="event.stopPropagation(); deleteDevice(${d.id}, &quot;${d.type}&quot;)">
+                                                    <i class="fas fa-trash"></i>
+                                                    <span>Удалить</span>
+                                                </button>
+                                            </div>
+                                        </div>
+                                    `).join('')}
+                                    ${group.children.map(child => renderGroup(child, level + 1)).join('')}
+                                </div>
+                        ` : ''}
+                    </div>
+                `;
+                
+                return groupHtml;
+            };
+            
+            const treeHtml = rootGroups.map(group => renderGroup(group)).join('');
+            treeContainer.innerHTML = treeHtml;
+            
+            // Привязываем event listeners для кнопок групп
+            treeContainer.querySelectorAll('.tree-actions .action-btn').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    const action = this.dataset.action;
+                    const groupId = parseInt(this.dataset.groupId);
+                    
+                    console.log('Button clicked:', action, 'groupId:', groupId);
+                    console.log('Function available:', typeof window[action === 'edit-group' ? 'editGroup' : action === 'delete-group' ? 'deleteGroup' : action === 'move-group' ? 'moveGroup' : 'showAddSubgroupModal']);
+                    
+                    switch(action) {
+                        case 'add-subgroup':
+                            console.log('Calling showAddSubgroupModal');
+                            showAddSubgroupModal(groupId);
+                            break;
+                        case 'move-group':
+                            console.log('Calling moveGroup');
+                            moveGroup(groupId);
+                            break;
+                        case 'edit-group':
+                            console.log('Calling editGroup');
+                            editGroup(groupId);
+                            break;
+                        case 'delete-group':
+                            console.log('Calling deleteGroup');
+                            deleteGroup(groupId);
+                            break;
+                    }
+                });
             });
             
-            document.getElementById('groupsStats').textContent = `${groups.length} групп`;
-        }
-        
-        function renderGroupNode(group) {
-            const node = document.createElement('div');
-            node.className = 'tree-item';
-            
-            const hasChildren = group.children && group.children.length > 0;
-            const isExpanded = expandedGroups.has(group.id);
-            
-            const groupDevices = devices.filter(d => d.group_id === group.id);
-
-            const hasContent = hasChildren || groupDevices.length > 0;
-            
-            node.innerHTML = `
-                <div class="tree-header" onclick="toggleGroup(${group.id})">
-                    ${hasContent ? `
-                        <div class="tree-toggle ${isExpanded ? 'rotated' : ''}">
-                            <i class="fas fa-chevron-right"></i>
-                        </div>
-                    ` : '<div class="tree-toggle" style="visibility: hidden;"><i class="fas fa-chevron-right"></i></div>'}
-                    
-                    <div class="tree-color" style="background: ${group.color}"></div>
-                    <div class="tree-name">${escapeHtml(group.name)}</div>
-                    <div class="tree-stats">
-                        ${group.servers_count || 0} серверов, ${group.printers_count || 0} принтеров
-                    </div>
-                    <div class="tree-actions">
-                        <button class="action-btn" onclick="event.stopPropagation(); showAddSubgroupModal(${group.id})" title="Добавить подгруппу">
-                            <i class="fas fa-folder-plus"></i>
-                        </button>
-                        <button class="action-btn" onclick="event.stopPropagation(); moveGroup(${group.id})" title="Переместить группу">
-                            <i class="fas fa-arrows-alt"></i>
-                        </button>
-                        <button class="action-btn" onclick="event.stopPropagation(); editGroup(${group.id})">
-                            <i class="fas fa-edit"></i>
-                        </button>
-                        <button class="action-btn action-delete" onclick="event.stopPropagation(); deleteGroup(${group.id})">
-                            <i class="fas fa-trash"></i>
-                        </button>
-                    </div>
-                </div>
-                ${hasContent ? `
-                    <div class="tree-content ${isExpanded ? 'expanded' : ''}" id="group-content-${group.id}">
-                        <div style="padding: 6px 0 6px 34px;">
-                            ${groupDevices.map(d => `
-                                <div style="display:flex; align-items:center; gap:10px; padding:2px 0;">
-                                    <div class="type-icon ${d.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 24px; height: 24px;">
-                                        <i class="fas ${d.type === 'server' ? 'fa-server' : 'fa-print'}"></i>
-                                    </div>
-                                    <div style="flex:1; min-width:0;">
-                                        <div style="display:flex; align-items:center; gap:6px;">
-                                            <span style="font-weight:600; font-size:13px;">${escapeHtml(d.name)}</span>
-                                            <button class="favorite-btn ${d.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${d.id}, '${d.type}', ${d.is_favorite ? 'false' : 'true'})"><i class="fas fa-star"></i></button>
-                                        </div>
-                                        <div style="font-size:12px; opacity:0.75;">${escapeHtml(d.ip)}${d.port ? `:${d.port}` : ''}</div>
-                                    </div>
-                                    <div class="device-actions" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
-                                        <button class="action-btn" onclick="event.stopPropagation(); showMoveDeviceModal(${d.id}, '${d.type}', ${group.id})">
-                                            <i class="fas fa-arrows-alt"></i>
-                                            <span>Переместить</span>
-                                        </button>
-                                        <button class="action-btn" onclick="event.stopPropagation(); editDevice(${d.id}, '${d.type}')">
-                                            <i class="fas fa-edit"></i>
-                                            <span>Изменить</span>
-                                        </button>
-                                        <button class="action-btn action-delete" onclick="event.stopPropagation(); deleteDevice(${d.id}, '${d.type}')">
-                                            <i class="fas fa-trash"></i>
-                                            <span>Удалить</span>
-                                        </button>
-                                    </div>
-                                </div>
-                            `).join('')}
-                        </div>
-                        ${(hasChildren ? group.children.map(child => renderGroupNode(child).outerHTML).join('') : '')}
-                    </div>
-                ` : ''}
-            `;
-            
-            return node;
+            // Проверяем, что кнопки доступны после рендеринга
+            setTimeout(() => {
+                const buttons = document.querySelectorAll('.tree-actions .action-btn');
+                console.log('Found buttons:', buttons.length);
+                buttons.forEach((btn, index) => {
+                    console.log(`Button ${index}:`, btn);
+                    console.log(`Button ${index} onclick:`, btn.onclick);
+                    console.log(`Button ${index} computed style:`, window.getComputedStyle(btn));
+                });
+            }, 100);
         }
 
         function showAddSubgroupModal(parentGroupId) {
+            console.log('showAddSubgroupModal called with parentGroupId:', parentGroupId);
             editingGroupId = null;
             const modal = document.getElementById('groupModal');
+            console.log('Modal element:', modal);
+            
+            if (!modal) {
+                console.error('groupModal not found!');
+                return;
+            }
+            
             modal.classList.add('active');
+            console.log('Modal classes after add:', modal.className);
 
-            document.querySelector('#groupModal .modal-title').textContent = 'Добавить группу';
+            const titleElement = document.querySelector('#groupModal .modal-title');
+            console.log('Title element:', titleElement);
+            if (titleElement) {
+                titleElement.textContent = 'Добавить группу';
+            }
+
             document.getElementById('groupId').value = '';
             document.getElementById('groupName').value = '';
             document.getElementById('groupColor').value = '#3498db';
             document.getElementById('colorPreview').style.backgroundColor = '#3498db';
 
             const parentGroup = document.getElementById('parentGroup');
+            console.log('Parent group element:', parentGroup);
             if (parentGroup) {
                 parentGroup.value = String(parentGroupId);
+                console.log('Parent group value set to:', parentGroup.value);
             }
         }
 
@@ -4055,23 +4151,23 @@
                 });
 
                 const data = await response.json();
-                if (!response.ok) {
-                    throw new Error(data.error || 'Ошибка перемещения');
-                }
+                if (data.success) {
+                    // Обновляем локальные данные
+                    const d = devices.find(x => x.id === deviceId && x.type === type);
+                    if (d) d.group_id = groupId;
 
-                // Обновляем локальные данные
-                const d = devices.find(x => x.id === deviceId && x.type === type);
-                if (d) d.group_id = groupId;
-
-                closeModal();
-                showNotification('Перемещено', 'success');
-
-                if (currentPage === 'groups') {
-                    renderGroupsPage();
-                } else if (currentPage === 'all') {
-                    renderAllGroupsPage();
+                    closeModal();
+                    showNotification('Перемещено', 'success');
+                    
+                    if (currentPage === 'groups') {
+                        renderGroupsPage();
+                    } else if (currentPage === 'all') {
+                        renderAllGroupsPage();
+                    } else {
+                        renderDevices();
+                    }
                 } else {
-                    renderDevices();
+                    throw new Error(data.error || 'Ошибка перемещения');
                 }
             } catch (e) {
                 console.error('Ошибка перемещения:', e);
@@ -4279,10 +4375,13 @@
         }
         
         async function saveGroup() {
+            console.log('saveGroup called');
             const id = document.getElementById('groupId').value;
             const name = document.getElementById('groupName').value.trim();
             const color = document.getElementById('groupColor').value;
             const parentId = document.getElementById('parentGroup').value || null;
+            
+            console.log('saveGroup data:', { id, name, color, parentId });
             
             if (!name) {
                 showNotification('Введите название группы', 'error');
@@ -4296,15 +4395,18 @@
                     data.id = id;
                 }
                 
+                console.log('Sending to /api/groups:', data);
                 const response = await fetch('/api/groups', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)
                 });
                 
+                console.log('Response status:', response.status);
                 const result = await response.json();
+                console.log('Response data:', result);
                 
-                if (response.ok) {
+                if (result.success) {
                     showNotification(id ? 'Группа обновлена' : 'Группа добавлена', 'success');
                     closeModal();
                     await loadData();
@@ -4314,9 +4416,10 @@
                         renderSubnetsPage();
                     }
                 } else {
-                    showNotification('Ошибка сохранения группы', 'error');
+                    showNotification(result.error || 'Ошибка сохранения группы', 'error');
                 }
             } catch (error) {
+                console.error('Error in saveGroup:', error);
                 showNotification('Ошибка соединения', 'error');
             }
         }
@@ -4904,14 +5007,20 @@
         }
         
         async function deleteGroup(id) {
+            console.log('deleteGroup called with id:', id);
             if (!confirm('Удалить эту группу? Устройства останутся без группы.')) return;
             
             try {
+                console.log('Sending DELETE to /api/groups/' + id);
                 const response = await fetch(`/api/groups/${id}`, {
                     method: 'DELETE'
                 });
                 
-                if (response.ok) {
+                console.log('Response status:', response.status);
+                const result = await response.json();
+                console.log('Response data:', result);
+                
+                if (result.success) {
                     showNotification('Группа удалена', 'success');
                     await loadData();
                     if (currentPage === 'groups') {
@@ -4919,8 +5028,11 @@
                     } else if (currentPage === 'subnets') {
                         renderSubnetsPage();
                     }
+                } else {
+                    showNotification(result.error || 'Ошибка удаления группы', 'error');
                 }
             } catch (error) {
+                console.error('Error in deleteGroup:', error);
                 showNotification('Ошибка удаления группы', 'error');
             }
         }
@@ -5235,6 +5347,10 @@
         window.deleteDevice = deleteDevice;
         window.deleteGroup = deleteGroup;
         window.toggleGroup = toggleGroup;
+        window.moveGroup = moveGroup;
+        window.showAddSubgroupModal = showAddSubgroupModal;
+        window.showMoveDeviceModal = showMoveDeviceModal;
+        window.toggleFavorite = toggleFavorite;
     </script>
 </body>
 </html>
