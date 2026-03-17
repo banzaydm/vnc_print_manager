@@ -837,8 +837,8 @@
             display: flex;
             gap: 4px;
             margin-left: 12px;
-            opacity: 0.8;
-            transition: opacity 0.2s;
+            opacity: 1;
+            transition: opacity 0.2s ease;
             flex-shrink: 0;
         }
         
@@ -1594,32 +1594,9 @@
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal()">Отмена</button>
                 <button class="btn" id="clearDbNextBtn" onclick="clearDbNext()">Продолжить</button>
-            </div>
-            <div class="modal-body">
-                <form id="groupForm">
-                    <input type="hidden" id="groupId" value="">
-                    <div class="form-group">
-                        <label class="form-label">Название группы *</label>
-                        <input type="text" id="groupName" class="form-input" required>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Цвет группы</label>
-                        <div style="display: flex; align-items: center; gap: 10px;">
-                            <input type="color" id="groupColor" value="#3498db" style="width: 40px; height: 40px; padding: 2px;">
-                            <div id="colorPreview" style="width: 24px; height: 24px; border-radius: 4px; background: #3498db;"></div>
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <label class="form-label">Родительская группа</label>
-                        <select id="parentGroup" class="form-input form-select">
-                            <option value="">Нет (основная группа)</option>
-                        </select>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button class="btn" onclick="closeModal()">Отмена</button>
-                <button class="btn" onclick="saveGroup()">Сохранить</button>
+                <button class="btn action-delete" id="clearDbConfirmBtn" onclick="clearDbConfirm()" style="display: none;">
+                    Подтвердить
+                </button>
             </div>
         </div>
     </div>
@@ -1634,19 +1611,19 @@
             <div class="modal-body">
                 <input type="hidden" id="groupId">
                 <div class="form-group">
-                    <label for="groupName">Название группы:</label>
-                    <input type="text" id="groupName" placeholder="Введите название группы">
+                    <label for="groupName" class="form-label">Название группы:</label>
+                    <input type="text" id="groupName" class="form-input" placeholder="Введите название группы">
                 </div>
                 <div class="form-group">
-                    <label for="groupColor">Цвет группы:</label>
+                    <label for="groupColor" class="form-label">Цвет группы:</label>
                     <div style="display: flex; align-items: center; gap: 10px;">
-                        <input type="color" id="groupColor" value="#3498db">
-                        <div id="colorPreview" style="width: 30px; height: 30px; border: 1px solid #ccc; border-radius: 4px; background: #3498db;"></div>
+                        <input type="color" id="groupColor" class="form-input" value="#3498db" style="width: 80px; height: 40px; padding: 4px;">
+                        <div id="colorPreview" style="width: 40px; height: 40px; border: 1px solid var(--input-border); border-radius: 6px; background: #3498db;"></div>
                     </div>
                 </div>
                 <div class="form-group">
-                    <label for="parentGroup">Родительская группа:</label>
-                    <select id="parentGroup">
+                    <label for="parentGroup" class="form-label">Родительская группа:</label>
+                    <select id="parentGroup" class="form-input form-select">
                         <option value="">Без родительской группы</option>
                     </select>
                 </div>
@@ -2076,11 +2053,6 @@
                     document.getElementById('serverIp').value = '';
                     document.getElementById('serverPort').value = '5900';
                 }
-            });
-            
-            // Цвет группы
-            document.getElementById('groupColor')?.addEventListener('input', function() {
-                document.getElementById('colorPreview').style.backgroundColor = this.value;
             });
             
             // Вкладки импорта/экспорта
@@ -3884,10 +3856,8 @@
         }
 
         async function clearDbConfirm() {
-            console.log('clearDbConfirm called with options:', _clearDbOptions);
             try {
                 const requestData = { confirm: 'CLEAR', confirm2: 'CLEAR', ..._clearDbOptions };
-                console.log('Sending to /api/admin/clear_db:', requestData);
                 
                 const response = await fetch('/api/admin/clear_db', {
                     method: 'POST',
@@ -3895,9 +3865,7 @@
                     body: JSON.stringify(requestData)
                 });
 
-                console.log('Response status:', response.status);
                 const data = await safeJson(response);
-                console.log('Response data:', data);
                 
                 if (data.success) {
                     closeModal();
@@ -3918,13 +3886,6 @@
         }
         
         function renderGroupsPage() {
-            console.log('renderGroupsPage called');
-            console.log('Checking function availability:');
-            console.log('window.editGroup:', typeof window.editGroup);
-            console.log('window.deleteGroup:', typeof window.deleteGroup);
-            console.log('window.moveGroup:', typeof window.moveGroup);
-            console.log('window.showAddSubgroupModal:', typeof window.showAddSubgroupModal);
-            
             const treeContainer = document.getElementById('groupsTree');
             const emptyState = document.getElementById('groupsEmpty');
             
@@ -4022,6 +3983,7 @@
                                     `).join('')}
                                     ${group.children.map(child => renderGroup(child, level + 1)).join('')}
                                 </div>
+                            </div>
                         ` : ''}
                     </div>
                 `;
@@ -4039,79 +4001,145 @@
                     const action = this.dataset.action;
                     const groupId = parseInt(this.dataset.groupId);
                     
-                    console.log('Button clicked:', action, 'groupId:', groupId);
-                    console.log('Function available:', typeof window[action === 'edit-group' ? 'editGroup' : action === 'delete-group' ? 'deleteGroup' : action === 'move-group' ? 'moveGroup' : 'showAddSubgroupModal']);
-                    
                     switch(action) {
                         case 'add-subgroup':
-                            console.log('Calling showAddSubgroupModal');
                             showAddSubgroupModal(groupId);
                             break;
                         case 'move-group':
-                            console.log('Calling moveGroup');
                             moveGroup(groupId);
                             break;
                         case 'edit-group':
-                            console.log('Calling editGroup');
                             editGroup(groupId);
                             break;
                         case 'delete-group':
-                            console.log('Calling deleteGroup');
                             deleteGroup(groupId);
                             break;
                     }
                 });
             });
-            
-            // Проверяем, что кнопки доступны после рендеринга
-            setTimeout(() => {
-                const buttons = document.querySelectorAll('.tree-actions .action-btn');
-                console.log('Found buttons:', buttons.length);
-                buttons.forEach((btn, index) => {
-                    console.log(`Button ${index}:`, btn);
-                    console.log(`Button ${index} onclick:`, btn.onclick);
-                    console.log(`Button ${index} computed style:`, window.getComputedStyle(btn));
-                });
-            }, 100);
         }
 
         function showAddSubgroupModal(parentGroupId) {
-            console.log('showAddSubgroupModal called with parentGroupId:', parentGroupId);
             editingGroupId = null;
             const modal = document.getElementById('groupModal');
-            console.log('Modal element:', modal);
             
             if (!modal) {
-                console.error('groupModal not found!');
                 return;
             }
-            
             modal.classList.add('active');
-            console.log('Modal classes after add:', modal.className);
 
             const titleElement = document.querySelector('#groupModal .modal-title');
-            console.log('Title element:', titleElement);
             if (titleElement) {
-                titleElement.textContent = 'Добавить группу';
+                titleElement.textContent = 'Добавить подгруппу';
             }
 
+            // Очищаем поля БЕЗ пересоздания обработчиков
             document.getElementById('groupId').value = '';
             document.getElementById('groupName').value = '';
             document.getElementById('groupColor').value = '#3498db';
             document.getElementById('colorPreview').style.backgroundColor = '#3498db';
 
-            const parentGroup = document.getElementById('parentGroup');
-            console.log('Parent group element:', parentGroup);
-            if (parentGroup) {
-                parentGroup.value = String(parentGroupId);
-                console.log('Parent group value set to:', parentGroup.value);
+            // НЕ добавляем обработчик цвета здесь, чтобы не пересоздавать элементы
+            // Используем существующий глобальный обработчик
+
+            // Заполняем список родительских групп
+            const parentSelect = document.getElementById('parentGroup');
+            parentSelect.innerHTML = '<option value="">Без родительской группы</option>';
+            
+            // Показываем все группы как возможные родительские
+            groups.forEach(g => {
+                const option = document.createElement('option');
+                option.value = g.id;
+                option.textContent = g.name;
+                if (parentGroupId && g.id === parentGroupId) {
+                    option.selected = true;
+                }
+                parentSelect.appendChild(option);
+            });
+
+            // Устанавливаем родительскую группу если передана
+            if (parentGroupId) {
+                parentSelect.value = String(parentGroupId);
             }
+            
+            // Фокус на поле названия
+            setTimeout(() => {
+                const nameInput = document.getElementById('groupName');
+                if (nameInput) {
+                    nameInput.focus();
+                }
+            }, 50);
         }
 
         function moveGroup(groupId) {
-            editGroup(groupId);
-            const parentGroup = document.getElementById('parentGroup');
-            if (parentGroup) parentGroup.focus();
+            const group = groups.find(g => g.id === groupId);
+            if (!group) return;
+            
+            const modal = document.getElementById('groupModal');
+            const title = document.querySelector('#groupModal .modal-title');
+            
+            // Заполняем данные группы
+            document.getElementById('groupId').value = group.id;
+            document.getElementById('groupName').value = group.name;
+            document.getElementById('groupColor').value = group.color;
+            document.getElementById('colorPreview').style.backgroundColor = group.color;
+            
+            // Добавляем обработчик изменения цвета
+            const colorInput = document.getElementById('groupColor');
+            const colorPreview = document.getElementById('colorPreview');
+            
+            if (colorInput && colorPreview) {
+                // Удаляем старые обработчики если есть
+                const newColorInput = colorInput.cloneNode(true);
+                colorInput.parentNode.replaceChild(newColorInput, colorInput);
+                
+                newColorInput.addEventListener('input', function() {
+                    colorPreview.style.backgroundColor = this.value;
+                });
+            }
+            
+            // Устанавливаем заголовок для перемещения
+            title.textContent = 'Переместить группу';
+            
+            // Заполняем список родительских групп (исключая текущую группу и её дочерние)
+            const parentSelect = document.getElementById('parentGroup');
+            parentSelect.innerHTML = '<option value="">Без родительской группы</option>';
+            
+            const getDescendants = (groupId) => {
+                const descendants = new Set();
+                const findDescendants = (id) => {
+                    groups.forEach(g => {
+                        if (g.parent_id === id) {
+                            descendants.add(g.id);
+                            findDescendants(g.id);
+                        }
+                    });
+                };
+                findDescendants(groupId);
+                return descendants;
+            };
+            
+            const forbiddenIds = getDescendants(groupId);
+            forbiddenIds.add(groupId); // Нельзя перемещать саму в себя
+            
+            groups.forEach(g => {
+                if (!forbiddenIds.has(g.id)) {
+                    const option = document.createElement('option');
+                    option.value = g.id;
+                    option.textContent = g.name;
+                    if (group.parent_id === g.id) {
+                        option.selected = true;
+                    }
+                    parentSelect.appendChild(option);
+                }
+            });
+            
+            modal.classList.add('active');
+            
+            // Фокус на выбор родительской группы
+            setTimeout(() => {
+                parentSelect.focus();
+            }, 100);
         }
 
         function showMoveDeviceModal(deviceId, type, currentGroupId) {
@@ -4351,13 +4379,65 @@
             document.getElementById('groupName').value = '';
             document.getElementById('groupColor').value = '#3498db';
             document.getElementById('colorPreview').style.backgroundColor = '#3498db';
-            document.getElementById('parentGroup').value = '';
+            
+            // Добавляем обработчик изменения цвета
+            const colorInput = document.getElementById('groupColor');
+            const colorPreview = document.getElementById('colorPreview');
+            
+            if (colorInput && colorPreview) {
+                // Удаляем старые обработчики если есть
+                const newColorInput = colorInput.cloneNode(true);
+                colorInput.parentNode.replaceChild(newColorInput, colorInput);
+                
+                newColorInput.addEventListener('input', function() {
+                    colorPreview.style.backgroundColor = this.value;
+                });
+            }
+            
+            // Заполняем список родительских групп
+            const parentSelect = document.getElementById('parentGroup');
+            parentSelect.innerHTML = '<option value="">Без родительской группы</option>';
             
             if (groupId) {
                 title.textContent = 'Редактировать группу';
                 loadGroupData(groupId);
+                
+                // Для редактирования исключаем текущую группу и её дочерние из списка родителей
+                const getDescendants = (groupId) => {
+                    const descendants = new Set();
+                    const findDescendants = (id) => {
+                        groups.forEach(g => {
+                            if (g.parent_id === id) {
+                                descendants.add(g.id);
+                                findDescendants(g.id);
+                            }
+                        });
+                    };
+                    findDescendants(groupId);
+                    return descendants;
+                };
+                
+                const forbiddenIds = getDescendants(groupId);
+                forbiddenIds.add(groupId);
+                
+                groups.forEach(g => {
+                    if (!forbiddenIds.has(g.id)) {
+                        const option = document.createElement('option');
+                        option.value = g.id;
+                        option.textContent = g.name;
+                        parentSelect.appendChild(option);
+                    }
+                });
             } else {
                 title.textContent = 'Добавить группу';
+                
+                // Для добавления показываем все группы как возможные родители
+                groups.forEach(g => {
+                    const option = document.createElement('option');
+                    option.value = g.id;
+                    option.textContent = g.name;
+                    parentSelect.appendChild(option);
+                });
             }
             
             modal.classList.add('active');
@@ -4375,16 +4455,41 @@
         }
         
         async function saveGroup() {
-            console.log('saveGroup called');
+            // МГНОВЕННАЯ проверка значения поля в момент вызова
+            const nameInput = document.getElementById('groupName');
+            const currentValue = nameInput ? nameInput.value : 'NOT_FOUND';
+            const currentTrimmed = nameInput ? nameInput.value.trim() : 'NOT_FOUND';
+            
+            console.log('=== saveGroup called ===');
+            console.log('Current field value at call time:', currentValue);
+            console.log('Current field value (trimmed):', currentTrimmed);
+            console.log('Field element exists:', !!nameInput);
+            
+            // Проверим, не меняется ли значение после
+            setTimeout(() => {
+                const delayedValue = nameInput ? nameInput.value : 'NOT_FOUND';
+                console.log('Field value after 100ms:', delayedValue);
+            }, 100);
+            
             const id = document.getElementById('groupId').value;
-            const name = document.getElementById('groupName').value.trim();
+            const name = nameInput ? nameInput.value.trim() : '';
             const color = document.getElementById('groupColor').value;
             const parentId = document.getElementById('parentGroup').value || null;
             
-            console.log('saveGroup data:', { id, name, color, parentId });
+            console.log('Final saveGroup data:', {
+                id: id || '(empty)',
+                name: name || '(empty)',
+                nameLength: name ? name.length : 0,
+                color: color || '(empty)',
+                parentId: parentId || '(empty)'
+            });
             
             if (!name) {
                 showNotification('Введите название группы', 'error');
+                if (nameInput) {
+                    nameInput.focus();
+                    nameInput.select();
+                }
                 return;
             }
             
@@ -4395,16 +4500,13 @@
                     data.id = id;
                 }
                 
-                console.log('Sending to /api/groups:', data);
                 const response = await fetch('/api/groups', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(data)
                 });
                 
-                console.log('Response status:', response.status);
                 const result = await response.json();
-                console.log('Response data:', result);
                 
                 if (result.success) {
                     showNotification(id ? 'Группа обновлена' : 'Группа добавлена', 'success');
@@ -4535,7 +4637,46 @@
         }
 
         function openNoVnc(serverId) {
-            window.open(`/novnc/${serverId}`, '_blank', 'noopener');
+            // Открываем noVNC с параметрами для правильного масштабирования
+            const novncUrl = `/novnc/${serverId}?`;
+            const params = new URLSearchParams({
+                // Параметры для правильного масштабирования
+                'resize': 'scale',        // Масштабировать под размер окна
+                'view_only': 'false',     // Разрешить взаимодействие
+                'shared': 'true',         // Разрешить одновременные подключения
+                'bell': 'true',           // Включить системные звуки
+                'clipboard': 'true'       // Включить буфер обмена
+            });
+            
+            const windowFeatures = [
+                'width=1200',
+                'height=800',
+                'resizable=yes',
+                'scrollbars=yes',
+                'status=yes',
+                'toolbar=no',
+                'menubar=no',
+                'location=no'
+            ].join(',');
+            
+            const novncWindow = window.open(novncUrl + params.toString(), '_blank', windowFeatures);
+            
+            // Добавляем обработчик для фокуса окна
+            if (novncWindow) {
+                novncWindow.focus();
+                
+                // Проверяем, что окно загрузилось и отправляем команду масштабирования
+                setTimeout(() => {
+                    try {
+                        novncWindow.postMessage({
+                            type: 'scale',
+                            value: 'scale'
+                        }, '*');
+                    } catch (e) {
+                        console.log('noVNC window not ready for scaling commands');
+                    }
+                }, 2000);
+            }
         }
         
         function showVncErrorModal(result) {
