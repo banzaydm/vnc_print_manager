@@ -18,7 +18,7 @@ class Group(db.Model):
 class Server(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    ip = db.Column(db.String(15), unique=True, nullable=False)
+    ip = db.Column(db.String(45), unique=True, nullable=False)
     port = db.Column(db.Integer, default=5900)
     group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True)
     is_favorite = db.Column(db.Boolean, default=False)
@@ -32,7 +32,7 @@ class Server(db.Model):
 class Printer(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    ip = db.Column(db.String(15), unique=True, nullable=False)
+    ip = db.Column(db.String(45), unique=True, nullable=False)
     group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True)
     web_interface = db.Column(db.String(500), default='')
     is_favorite = db.Column(db.Boolean, default=False)

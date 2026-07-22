@@ -1788,6 +1788,17 @@
                 </div>
 
                 <div class="form-group" style="margin-bottom: 18px;">
+                    <label class="form-label">Безопасность</label>
+                    <div style="margin-bottom: 16px;">
+                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">API ключ (если включён на сервере)</label>
+                        <input type="password" id="apiKeyInput" class="form-input" placeholder="Введите API_KEY сервера" autocomplete="off">
+                        <small style="display: block; margin-top: 6px; opacity: 0.7; font-size: 12px;">
+                            Ключ хранится локально в браузере и отправляется в заголовке X-API-Key.
+                        </small>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-bottom: 18px;">
                     <label class="form-label">Данные</label>
                     <div style="display: flex; gap: 10px; flex-wrap: wrap;">
                         <button class="btn" onclick="showImportExportModal()">
@@ -1918,8 +1929,24 @@
 
     <script>
         // Версия приложения
-        const APP_VERSION = '1.0.2';
-        const APP_VERSION_DATE = '21.02.2026';
+        const APP_VERSION = '1.0.3';
+        const APP_VERSION_DATE = '22.07.2026';
+
+        // Автоматически добавляем API-ключ ко всем запросам /api/*
+        const _originalFetch = window.fetch.bind(window);
+        window.fetch = function(url, options = {}) {
+            if (typeof url === 'string' && url.startsWith('/api/')) {
+                const key = localStorage.getItem('vnc_api_key');
+                if (key) {
+                    const headers = new Headers(options.headers || {});
+                    if (!headers.has('X-API-Key')) {
+                        headers.set('X-API-Key', key);
+                    }
+                    options = { ...options, headers };
+                }
+            }
+            return _originalFetch(url, options);
+        };
         
         // Функция обновления информации о версии в интерфейсе
         function updateVersionDisplay() {
@@ -3287,15 +3314,13 @@
         }
 
         function loadBackupList() {
-            // Загружаем список бэкапов с сервера
+            const backupListEl = document.getElementById('backupList');
+            const modalBackupListEl = document.getElementById('modalBackupList');
+
             fetch('/api/backups')
             .then(response => response.json())
             .then(data => {
                 if (data.success && data.backups && data.backups.length > 0) {
-                    // Обновляем список в настройках
-                    const backupListEl = document.getElementById('backupList');
-                    const modalBackupListEl = document.getElementById('modalBackupList');
-                    
                     const backupHtml = data.backups.map(backup => `
                         <div style="display: flex; justify-content: space-between; align-items: center; padding: 8px; border-bottom: 1px solid var(--card-border);">
                             <div style="display: flex; align-items: center; flex: 1;">
@@ -4637,17 +4662,7 @@
         }
 
         function openNoVnc(serverId) {
-            // Открываем noVNC с параметрами для правильного масштабирования
-            const novncUrl = `/novnc/${serverId}?`;
-            const params = new URLSearchParams({
-                // Параметры для правильного масштабирования
-                'resize': 'scale',        // Масштабировать под размер окна
-                'view_only': 'false',     // Разрешить взаимодействие
-                'shared': 'true',         // Разрешить одновременные подключения
-                'bell': 'true',           // Включить системные звуки
-                'clipboard': 'true'       // Включить буфер обмена
-            });
-            
+            const novncUrl = `/novnc/${serverId}`;
             const windowFeatures = [
                 'width=1200',
                 'height=800',
@@ -4658,24 +4673,10 @@
                 'menubar=no',
                 'location=no'
             ].join(',');
-            
-            const novncWindow = window.open(novncUrl + params.toString(), '_blank', windowFeatures);
-            
-            // Добавляем обработчик для фокуса окна
+
+            const novncWindow = window.open(novncUrl, '_blank', windowFeatures);
             if (novncWindow) {
                 novncWindow.focus();
-                
-                // Проверяем, что окно загрузилось и отправляем команду масштабирования
-                setTimeout(() => {
-                    try {
-                        novncWindow.postMessage({
-                            type: 'scale',
-                            value: 'scale'
-                        }, '*');
-                    } catch (e) {
-                        console.log('noVNC window not ready for scaling commands');
-                    }
-                }, 2000);
             }
         }
         
@@ -4744,6 +4745,9 @@
                 
                 const appTitleInput = document.getElementById('appTitleInput');
                 if (appTitleInput) appTitleInput.value = settings.app_title || 'VNC Manager';
+
+                const apiKeyInput = document.getElementById('apiKeyInput');
+                if (apiKeyInput) apiKeyInput.value = localStorage.getItem('vnc_api_key') || '';
                 
                 // Если есть favicon, показываем превью
                 if (settings.favicon_path) {
@@ -4778,10 +4782,20 @@
                 const themeSelect = document.getElementById('themeSelect');
                 const primaryColorInput = document.getElementById('primaryColorInput');
                 const appTitleInput = document.getElementById('appTitleInput');
+                const apiKeyInput = document.getElementById('apiKeyInput');
                 
                 if (!themeSelect || !primaryColorInput || !appTitleInput) {
                     showNotification('Форма настроек не найдена', 'error');
                     return;
+                }
+
+                if (apiKeyInput) {
+                    const apiKey = apiKeyInput.value.trim();
+                    if (apiKey) {
+                        localStorage.setItem('vnc_api_key', apiKey);
+                    } else {
+                        localStorage.removeItem('vnc_api_key');
+                    }
                 }
                 
                 const settings = {

@@ -7,14 +7,17 @@ services:
     ports:
       - "5000:5000"  # Веб-интерфейс
     volumes:
-      - vnc_manager_data:/app/instance  # Сохранение базы данных и логов
-      - vnc_manager_db:/app/vnc_manager.db  # База данных SQLite
+      - vnc_manager_data:/app/instance  # БД, бэкапы, токены noVNC
     environment:
       - FLASK_APP=app.py
       - FLASK_ENV=production
+      - FLASK_DEBUG=0
       - NOVNC_PROXY_PORT=6080
       - NOVNC_TOKEN_TTL_SECONDS=600
       - INIT_DB_ON_START=1
+      - SEED_DEMO_DATA=0
+      - START_WEBSOCKIFY=0
+      # - API_KEY=your-secret-key
     restart: unless-stopped
     networks:
       - vnc_net
@@ -33,31 +36,17 @@ services:
     ports:
       - "6080:6080"  # noVNC WebSocket прокси
     volumes:
-      - vnc_manager_data:/app/instance  # Общий TokenFile и логи websockify
-      - vnc_manager_db:/app/vnc_manager.db  # Общий доступ к базе данных
+      - vnc_manager_data:/app/instance  # Общий TokenFile
     environment:
       - NOVNC_PROXY_PORT=6080
+      - START_WEBSOCKIFY=0
     command: ["python", "-m", "websockify", "--token-plugin", "TokenFile", "--token-source", "/app/instance/novnc_tokens.txt", "--verbose", "6080"]
     restart: unless-stopped
     networks:
       - vnc_net
 
-  # Опционально: можно добавить базу данных PostgreSQL для продакшена
-  # postgres:
-  #   image: postgres:15
-  #   container_name: vnc-print-db
-  #   environment:
-  #     POSTGRES_DB: vnc_manager
-  #     POSTGRES_USER: vnc_user
-  #     POSTGRES_PASSWORD: vnc_password
-  #   volumes:
-  #     - postgres_data:/var/lib/postgresql/data
-  #   restart: unless-stopped
-
 volumes:
   vnc_manager_data:
-    driver: local
-  vnc_manager_db:
     driver: local
 
 networks:

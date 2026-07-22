@@ -5,21 +5,112 @@ import socket
 import secrets
 import threading
 import time
+import json
+import re
 from datetime import datetime
 import platform
 from pathlib import Path
 import ipaddress
 import concurrent.futures
+from markupsafe import escape
 from models import db, Group, Server, Printer, Settings, SubnetName
 from sqlalchemy import text
 
 app = Flask(__name__, static_folder='.', static_url_path='')
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///vnc_manager.db'
+os.makedirs(app.instance_path, exist_ok=True)
+_db_path = os.path.join(app.instance_path, 'vnc_manager.db')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + _db_path.replace('\\', '/')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 
 APP_BUILD_ID = f"{int(time.time())}:{Path(__file__).name}"
+API_KEY = os.environ.get('API_KEY', '').strip()
+STATUS_CACHE_TTL = int(os.environ.get('STATUS_CACHE_TTL', '30'))
+BACKUPS_DIR = os.path.join(app.instance_path, 'backups')
+os.makedirs(BACKUPS_DIR, exist_ok=True)
+
+NOVNC_PROXY_PORT = int(os.environ.get("NOVNC_PROXY_PORT", "6080"))
+NOVNC_TOKEN_TTL_SECONDS = int(os.environ.get("NOVNC_TOKEN_TTL_SECONDS", "600"))
+NOVNC_WS_PATH = os.environ.get("NOVNC_WS_PATH", "").strip()
+NOVNC_CDN_VERSION = os.environ.get("NOVNC_CDN_VERSION", "1.5.0")
+_NOVNC_TOKEN_FILE = os.path.join(app.instance_path, "novnc_tokens.txt")
+
+_PROTECTED_API_PREFIXES = (
+    '/api/admin/',
+    '/api/import',
+    '/api/export',
+    '/api/create_backup',
+    '/api/restore_backup/',
+    '/api/delete_backups',
+)
+_PROTECTED_API_EXACT = frozenset({'/api/import'})
+
+_status_cache = {}
+_status_cache_lock = threading.Lock()
+BACKUP_FILENAME_RE = re.compile(r'^backup_\d{8}_\d{6}\.json$')
+
+
+def get_json():
+    return request.get_json(silent=True) or {}
+
+
+def _safe_backup_path(filename: str):
+    if not filename or not BACKUP_FILENAME_RE.fullmatch(filename):
+        return None
+    path = os.path.join(BACKUPS_DIR, filename)
+    if os.path.realpath(path).startswith(os.path.realpath(BACKUPS_DIR)):
+        return path
+    return None
+
+
+def _extract_api_key():
+    auth = request.headers.get('Authorization', '')
+    if auth.startswith('Bearer '):
+        return auth[7:].strip()
+    return request.headers.get('X-API-Key', '').strip()
+
+
+def _require_api_key():
+    if not API_KEY:
+        return None
+    if _extract_api_key() != API_KEY:
+        return jsonify({'error': 'Требуется API ключ'}), 401
+    return None
+
+
+def _is_protected_api(path: str) -> bool:
+    if path.startswith('/api/novnc/') and path.endswith('/token'):
+        return True
+    if path in _PROTECTED_API_EXACT:
+        return True
+    return any(path.startswith(prefix) for prefix in _PROTECTED_API_PREFIXES)
+
+
+def get_server_status_cached(ip, port):
+    key = (ip, int(port))
+    now = time.time()
+    with _status_cache_lock:
+        cached = _status_cache.get(key)
+        if cached and cached[1] > now:
+            return cached[0]
+    online = check_server_status(ip, port)
+    with _status_cache_lock:
+        _status_cache[key] = (online, now + STATUS_CACHE_TTL)
+    return online
+
+
+def get_printer_status_cached(ip):
+    key = ('printer', ip)
+    now = time.time()
+    with _status_cache_lock:
+        cached = _status_cache.get(key)
+        if cached and cached[1] > now:
+            return cached[0]
+    online = check_printer_status(ip)
+    with _status_cache_lock:
+        _status_cache[key] = (online, now + STATUS_CACHE_TTL)
+    return online
 
 
 @app.route('/api/debug/routes', methods=['GET'])
@@ -39,7 +130,7 @@ def debug_routes():
 def add_api_cors_headers(response):
     if request.path.startswith('/api/'):
         response.headers.setdefault('Access-Control-Allow-Origin', '*')
-        response.headers.setdefault('Access-Control-Allow-Headers', 'Content-Type')
+        response.headers.setdefault('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-API-Key')
         response.headers.setdefault('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS')
     return response
 
@@ -49,13 +140,30 @@ def api_options(any_path):
     return ('', 204)
 
 
+@app.route('/api/config', methods=['GET'])
+def api_config():
+    return jsonify({
+        'auth_required': bool(API_KEY),
+        'novnc_proxy_port': NOVNC_PROXY_PORT,
+        'novnc_ws_path': NOVNC_WS_PATH,
+    })
+
+
 @app.before_request
-def _log_problem_endpoints():
+def _api_auth_and_logging():
     if request.path.startswith('/api/favorites/') or request.path == '/api/admin/clear_db':
         try:
             app.logger.info('API request: %s %s', request.method, request.path)
         except Exception:
             pass
+
+    if request.method == 'OPTIONS':
+        return None
+    if request.path.startswith('/api/') and _is_protected_api(request.path):
+        auth_error = _require_api_key()
+        if auth_error:
+            return auth_error
+    return None
 
 
 @app.errorhandler(404)
@@ -72,12 +180,6 @@ def handle_405(e):
     return e
 
 # --- noVNC / websockify ---
-NOVNC_PROXY_PORT = int(os.environ.get("NOVNC_PROXY_PORT", "6080"))
-NOVNC_TOKEN_TTL_SECONDS = int(os.environ.get("NOVNC_TOKEN_TTL_SECONDS", "600"))
-os.makedirs(app.instance_path, exist_ok=True)
-_NOVNC_TOKEN_FILE = os.path.join(app.instance_path, "novnc_tokens.txt")
-
-# Гарантируем, что файл токенов существует (даже пустой) — он нужен отдельному сервису websockify.
 if not os.path.exists(_NOVNC_TOKEN_FILE):
     with open(_NOVNC_TOKEN_FILE, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n")
@@ -148,8 +250,9 @@ def init_db():
         except Exception:
             db.session.rollback()
         
-        # Создаем тестовые группы если их нет
-        if Group.query.count() == 0:
+        seed_demo = os.environ.get('SEED_DEMO_DATA', '0').strip().lower() in {'1', 'true', 'yes', 'on'}
+        # Создаем тестовые группы если их нет (только при явном SEED_DEMO_DATA=1)
+        if seed_demo and Group.query.count() == 0:
             groups = [
                 Group(name="Серверы отдела", color="#3498db", parent_id=None),
                 Group(name="Принтеры", color="#e74c3c", parent_id=None),
@@ -198,6 +301,16 @@ def init_db():
             db.session.commit()
             print("База данных инициализирована с тестовыми данными")
 
+def _tcp_probe_printer(host: str) -> bool:
+    for p in (9100, 631, 515, 80, 443):
+        try:
+            with socket.create_connection((host, p), timeout=1):
+                return True
+        except OSError:
+            continue
+    return False
+
+
 def check_server_status(ip, port=5900):
     """Проверка статуса сервера VNC"""
     try:
@@ -206,35 +319,23 @@ def check_server_status(ip, port=5900):
         result = sock.connect_ex((ip, port))
         sock.close()
         return result == 0
-    except:
+    except OSError:
         return False
 
-def check_printer_status(ip):
-    """Проверка статуса принтера (поддержка Windows и Unix)"""
-    try:
-        system = platform.system()
-        # В контейнерах/минимальных образах ping может отсутствовать.
-        # В этом случае делаем быструю TCP-проверку на типичных портах принтера/веб-интерфейса.
-        def _tcp_probe(host: str) -> bool:
-            for p in (9100, 631, 515, 80, 443):
-                try:
-                    with socket.create_connection((host, p), timeout=1):
-                        return True
-                except Exception:
-                    continue
-            return False
 
-        if system == 'Windows':
-            # Windows использует другой синтаксис ping
-            result = subprocess.run(['ping', '-n', '1', '-w', '1000', ip], 
-                                  capture_output=True, text=True, timeout=2)
+def check_printer_status(ip):
+    """Проверка статуса принтера (ping + TCP fallback)"""
+    try:
+        if platform.system() == 'Windows':
+            cmd = ['ping', '-n', '1', '-w', '1000', ip]
         else:
-            # Unix/Linux/macOS
-            result = subprocess.run(['ping', '-c', '1', '-W', '1', ip], 
-                                  capture_output=True, text=True, timeout=2)
-        return result.returncode == 0
-    except:
-        return _tcp_probe(ip)
+            cmd = ['ping', '-c', '1', '-W', '1', ip]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            return True
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    return _tcp_probe_printer(ip)
 
 def find_vnc_client():
     """Поиск VNC клиента на текущей платформе"""
@@ -321,7 +422,9 @@ def groups_api():
         return jsonify(result)
     
     elif request.method == 'POST':
-        data = request.json
+        data = get_json()
+        if not data.get('name'):
+            return jsonify({'error': 'Укажите название группы'}), 400
         
         if 'id' in data and data['id']:
             group = Group.query.get(data['id'])
@@ -374,7 +477,7 @@ def get_servers():
             'last_seen': server.last_seen.isoformat() if server.last_seen else None,
             'comment': server.comment,
             'created_at': server.created_at.isoformat() if server.created_at else None,
-            'status': 'online' if check_server_status(server.ip, server.port) else 'offline'
+            'status': 'online' if get_server_status_cached(server.ip, server.port) else 'offline'
         }
         
         if server.group:
@@ -387,7 +490,9 @@ def get_servers():
 
 @app.route('/api/servers', methods=['POST'])
 def add_server():
-    data = request.json
+    data = get_json()
+    if not data.get('name') or not data.get('ip'):
+        return jsonify({'error': 'Укажите название и IP'}), 400
     
     # Проверка на дубликат IP
     if Server.query.filter_by(ip=data['ip']).first():
@@ -412,7 +517,7 @@ def server_api(server_id):
         return jsonify({'error': 'Сервер не найден'}), 404
     
     if request.method == 'PUT':
-        data = request.json
+        data = get_json()
         
         # Проверка на дубликат IP при изменении
         if 'ip' in data and data['ip'] != server.ip:
@@ -447,7 +552,7 @@ def printers_api():
         printers = Printer.query.order_by(Printer.name).all()
         result = []
         for printer in printers:
-            is_online = check_printer_status(printer.ip)
+            is_online = get_printer_status_cached(printer.ip)
             printer_dict = {
                 'id': printer.id,
                 'name': printer.name,
@@ -469,7 +574,9 @@ def printers_api():
         return jsonify(result)
     
     elif request.method == 'POST':
-        data = request.json
+        data = get_json()
+        if not data.get('name') or not data.get('ip'):
+            return jsonify({'error': 'Укажите название и IP'}), 400
         
         # Проверка на дубликат IP
         if Printer.query.filter_by(ip=data['ip']).first():
@@ -495,7 +602,7 @@ def printer_api(printer_id):
         return jsonify({'error': 'Принтер не найден'}), 404
     
     if request.method == 'PUT':
-        data = request.json
+        data = get_json()
         
         # Проверка на дубликат IP при изменении
         if 'ip' in data and data['ip'] != printer.ip:
@@ -528,7 +635,7 @@ def connect_vnc(server_id):
     """Подключение к VNC серверу"""
     server = Server.query.get(server_id)
     if not server:
-        return jsonify({'success': False, 'message': 'Сервер не найден'})
+        return jsonify({'success': False, 'message': 'Сервер не найден'}), 404
     
     vnc_path, client_name = find_vnc_client()
     
@@ -868,55 +975,40 @@ def scan_network():
     
     def is_likely_printer(ip, port):
         """Улучшенная проверка на принтер"""
+        if port in (9100, 631, 515):
+            return True
         try:
             import urllib.request
-            import urllib.error
-            import re
-            
+
             url = f'http{"s" if port == 443 else ""}://{ip}:{port}'
             req = urllib.request.Request(url, method='GET')
-            
+
             with urllib.request.urlopen(req, timeout=5) as response:
                 headers = dict(response.headers)
                 content = response.read(5000).decode('utf-8', errors='ignore').lower()
-                
-                # Признаки принтера в HTTP заголовках
-                server = headers.get('Server', '').lower()
-                content_type = headers.get('Content-Type', '').lower()
-                
-                # Расширенный список ключевых слов принтеров
+
                 printer_keywords = [
                     'printer', 'hp', 'canon', 'epson', 'brother', 'xerox',
                     'lexmark', 'samsung', 'kyocera', 'ricoh', 'panasonic',
                     'sharp', 'toshiba', 'konica', 'minolta', 'oki',
-                    'dell', 'xerox', 'fuji', 'zebra', 'dymo'
+                    'dell', 'fuji', 'zebra', 'dymo'
                 ]
-                
-                # Проверка заголовков
+
+                server = headers.get('Server', '').lower()
+                content_type = headers.get('Content-Type', '').lower()
                 header_match = any(keyword in server for keyword in printer_keywords)
-                
-                # Проверка Content-Type
                 content_type_match = any(keyword in content_type for keyword in printer_keywords)
-                
-                # Проверка содержимого страницы (title, текст)
-                title_match = False
-                if '<title>' in content:
-                    title_match = any(keyword in content for keyword in printer_keywords)
-                
-                # Проверка URL путей (часто в принтерах есть /printer, /status, /main)
+                title_match = '<title>' in content and any(keyword in content for keyword in printer_keywords)
                 path_match = any(path in content for path in ['/printer', '/status', '/main', '/device', '/web'])
-                
-                # Если порт 9100 - скорее всего это принтер (стандартный порт печати)
-                port_match = port == 9100
-                
-                # Достаточно любого совпадения
-                is_printer = header_match or content_type_match or title_match or path_match or port_match
-                
+                is_printer = header_match or content_type_match or title_match or path_match
+
                 if is_printer:
-                    app.logger.info(f'Найден принтер {ip}:{port} - признаки: header={header_match}, content_type={content_type_match}, title={title_match}, path={path_match}, port={port_match}')
-                
+                    app.logger.info(
+                        f'Найден принтер {ip}:{port} - признаки: header={header_match}, '
+                        f'content_type={content_type_match}, title={title_match}, path={path_match}'
+                    )
                 return is_printer
-                
+
         except Exception as e:
             app.logger.debug(f'Ошибка проверки принтера {ip}:{port}: {e}')
             return False
@@ -1043,13 +1135,17 @@ def novnc_page(server_id):
     if not server:
         return "Сервер не найден", 404
 
-    # Минимальная страница noVNC. Библиотеку берём с CDN, прокси — websockify на NOVNC_PROXY_PORT.
+    safe_name = escape(server.name)
+    ws_path = NOVNC_WS_PATH.replace('\\', '/')
+    if ws_path and not ws_path.startswith('/'):
+        ws_path = '/' + ws_path
+
     return f"""<!doctype html>
 <html lang="ru">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>noVNC — {server.name}</title>
+  <title>noVNC — {safe_name}</title>
   <style>
     :root {{
       --bg: #0f172a;
@@ -1102,8 +1198,8 @@ def novnc_page(server_id):
   <div class="wrap">
     <div class="top">
       <div class="title">
-        <strong>noVNC — {server.name}</strong>
-        <span>{server.ip}:{server.port}</span>
+        <strong>noVNC — {safe_name}</strong>
+        <span>{escape(server.ip)}:{int(server.port)}</span>
       </div>
       <div class="actions">
         <div id="status">Подготовка…</div>
@@ -1115,9 +1211,10 @@ def novnc_page(server_id):
   </div>
 
   <script type="module">
-    import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@latest/core/rfb.js';
+    import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@{NOVNC_CDN_VERSION}/core/rfb.js';
 
     const serverId = {server.id};
+    const novncWsPath = {json.dumps(ws_path)};
     const statusEl = document.getElementById('status');
     const screen = document.getElementById('screen');
     const btnReconnect = document.getElementById('btnReconnect');
@@ -1143,7 +1240,9 @@ def novnc_page(server_id):
 
         const scheme = (location.protocol === 'https:') ? 'wss' : 'ws';
         const host = location.hostname;
-        const wsUrl = `${{scheme}}://${{host}}:${{data.proxy_port}}/?token=${{encodeURIComponent(data.token)}}`;
+        const wsUrl = novncWsPath
+          ? `${{scheme}}://${{host}}${{novncWsPath}}?token=${{encodeURIComponent(data.token)}}`
+          : `${{scheme}}://${{host}}:${{data.proxy_port}}/?token=${{encodeURIComponent(data.token)}}`;
 
         if (rfb) {{
           try {{ rfb.disconnect(); }} catch (_) {{}}
@@ -1245,7 +1344,7 @@ def export_data():
                 'last_seen': server.last_seen.isoformat() if server.last_seen else None,
                 'comment': server.comment,
                 'created_at': server.created_at.isoformat() if server.created_at else None,
-                'status': 'online' if check_server_status(server.ip, server.port) else 'offline'
+                'status': 'online' if get_server_status_cached(server.ip, server.port) else 'offline'
             })
         
         printers_data = []
@@ -1256,7 +1355,8 @@ def export_data():
                 'ip': printer.ip,
                 'group_id': printer.group_id,
                 'web_interface': printer.web_interface,
-                'status': 'online' if printer.status else 'offline',
+                'is_favorite': bool(getattr(printer, 'is_favorite', False)),
+                'status': 'online' if get_printer_status_cached(printer.ip) else 'offline',
                 'comment': printer.comment,
                 'created_at': printer.created_at.isoformat() if printer.created_at else None
             })
@@ -1279,99 +1379,183 @@ def export_data():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+
+def _backup_to_import_payload(backup_data):
+    """Преобразует формат файла бэкапа в формат импорта."""
+    if backup_data.get('servers') or backup_data.get('printers'):
+        return {
+            'mode': 'overwrite',
+            'groups': backup_data.get('groups', []),
+            'servers': backup_data.get('servers', []),
+            'printers': backup_data.get('printers', []),
+            'subnet_names': backup_data.get('subnetNames', []),
+            'settings': backup_data.get('settings', {}),
+        }
+
+    servers = []
+    printers = []
+    for device in backup_data.get('devices', []):
+        if device.get('type') == 'server':
+            servers.append({
+                'name': device.get('name'),
+                'ip': device.get('ip'),
+                'port': device.get('port', 5900),
+                'group_id': device.get('group_id'),
+                'is_favorite': device.get('is_favorite', False),
+                'comment': device.get('comment', ''),
+            })
+        elif device.get('type') == 'printer':
+            printers.append({
+                'name': device.get('name'),
+                'ip': device.get('ip'),
+                'group_id': device.get('group_id'),
+                'web_interface': device.get('web_interface', f"http://{device.get('ip', '')}"),
+                'is_favorite': device.get('is_favorite', False),
+                'comment': device.get('comment', ''),
+            })
+
+    return {
+        'mode': 'overwrite',
+        'groups': backup_data.get('groups', []),
+        'servers': servers,
+        'printers': printers,
+        'subnet_names': backup_data.get('subnetNames', []),
+        'settings': backup_data.get('settings', {}),
+    }
+
+
+def import_data_core(data):
+    if not data:
+        raise ValueError('Нет данных для импорта')
+
+    mode = data.get('mode', 'merge')
+
+    if mode == 'overwrite':
+        Server.query.update({'group_id': None}, synchronize_session=False)
+        Printer.query.update({'group_id': None}, synchronize_session=False)
+        Group.query.update({'parent_id': None}, synchronize_session=False)
+        Server.query.delete(synchronize_session=False)
+        Printer.query.delete(synchronize_session=False)
+        Group.query.delete(synchronize_session=False)
+        db.session.commit()
+
+    groups_data = data.get('groups', [])
+    group_map = {}
+
+    for group_data in groups_data:
+        if not group_data.get('name'):
+            continue
+        group_id = group_data.get('id')
+        if group_id and Group.query.get(group_id):
+            group = Group.query.get(group_id)
+            group.name = group_data['name']
+            group.color = group_data.get('color', '#3498db')
+            group.parent_id = group_data.get('parent_id')
+            new_group_id = group.id
+        else:
+            group = Group(
+                name=group_data['name'],
+                color=group_data.get('color', '#3498db'),
+                parent_id=group_data.get('parent_id')
+            )
+            db.session.add(group)
+            db.session.flush()
+            new_group_id = group.id
+
+        if group_id:
+            group_map[group_id] = new_group_id
+
+    db.session.commit()
+
+    servers_data = data.get('servers', [])
+    for server_data in servers_data:
+        if not server_data.get('ip') or not server_data.get('name'):
+            continue
+        group_id = group_map.get(server_data.get('group_id')) if server_data.get('group_id') else None
+
+        existing = Server.query.filter_by(ip=server_data['ip']).first()
+        if existing:
+            existing.name = server_data['name']
+            existing.port = server_data.get('port', 5900)
+            existing.group_id = group_id
+            existing.is_favorite = server_data.get('is_favorite', False)
+            existing.comment = server_data.get('comment', '')
+        else:
+            db.session.add(Server(
+                name=server_data['name'],
+                ip=server_data['ip'],
+                port=server_data.get('port', 5900),
+                group_id=group_id,
+                is_favorite=server_data.get('is_favorite', False),
+                comment=server_data.get('comment', ''),
+            ))
+
+    printers_data = data.get('printers', [])
+    for printer_data in printers_data:
+        if not printer_data.get('ip') or not printer_data.get('name'):
+            continue
+        group_id = group_map.get(printer_data.get('group_id')) if printer_data.get('group_id') else None
+
+        existing = Printer.query.filter_by(ip=printer_data['ip']).first()
+        if existing:
+            existing.name = printer_data['name']
+            existing.group_id = group_id
+            existing.web_interface = printer_data.get('web_interface', f"http://{printer_data['ip']}")
+            existing.is_favorite = printer_data.get('is_favorite', False)
+            existing.comment = printer_data.get('comment', '')
+        else:
+            db.session.add(Printer(
+                name=printer_data['name'],
+                ip=printer_data['ip'],
+                group_id=group_id,
+                web_interface=printer_data.get('web_interface', f"http://{printer_data['ip']}"),
+                is_favorite=printer_data.get('is_favorite', False),
+                comment=printer_data.get('comment', ''),
+            ))
+
+    subnet_names = data.get('subnet_names', [])
+    for entry in subnet_names:
+        if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+            subnet, name = entry[0], entry[1]
+        elif isinstance(entry, dict):
+            subnet, name = entry.get('subnet'), entry.get('name')
+        else:
+            continue
+        if not subnet:
+            continue
+        record = SubnetName.query.filter_by(subnet=subnet).first()
+        if name:
+            if record:
+                record.name = name
+            else:
+                db.session.add(SubnetName(subnet=subnet, name=name))
+        elif record:
+            db.session.delete(record)
+
+    settings_data = data.get('settings') or {}
+    if isinstance(settings_data, dict):
+        for key, value in settings_data.items():
+            if value is None or value == '':
+                continue
+            setting = Settings.query.filter_by(key=key).first()
+            if setting:
+                setting.value = str(value)
+                setting.updated_at = datetime.utcnow()
+            else:
+                db.session.add(Settings(key=key, value=str(value), type='string', description=f'Настройка {key}'))
+
+    db.session.commit()
+
+
 @app.route('/api/import', methods=['POST'])
 def import_data():
     """Импорт данных из JSON"""
     try:
-        data = request.json
-        
-        if not data:
-            return jsonify({'error': 'Нет данных для импорта'}), 400
-        
-        mode = data.get('mode', 'merge')
-        
-        if mode == 'overwrite':
-            Server.query.delete()
-            Printer.query.delete()
-            Group.query.delete()
-            db.session.commit()
-        
-        groups_data = data.get('groups', [])
-        group_map = {}
-        
-        for group_data in groups_data:
-            group_id = group_data.get('id')
-            if group_id and Group.query.get(group_id):
-                group = Group.query.get(group_id)
-                group.name = group_data['name']
-                group.color = group_data.get('color', '#3498db')
-                group.parent_id = group_data.get('parent_id')
-                new_group_id = group.id
-            else:
-                group = Group(
-                    name=group_data['name'],
-                    color=group_data.get('color', '#3498db'),
-                    parent_id=group_data.get('parent_id')
-                )
-                db.session.add(group)
-                db.session.flush()
-                new_group_id = group.id
-            
-            if group_id:
-                group_map[group_id] = new_group_id
-        
-        db.session.commit()
-        
-        servers_data = data.get('servers', [])
-        for server_data in servers_data:
-            group_id = group_map.get(server_data.get('group_id')) if server_data.get('group_id') else None
-            
-            if Server.query.filter_by(ip=server_data['ip']).first():
-                # Обновляем существующий сервер
-                server = Server.query.filter_by(ip=server_data['ip']).first()
-                server.name = server_data['name']
-                server.port = server_data.get('port', 5900)
-                server.group_id = group_id
-                server.is_favorite = server_data.get('is_favorite', False)
-                server.comment = server_data.get('comment', '')
-            else:
-                # Создаем новый сервер
-                server = Server(
-                    name=server_data['name'],
-                    ip=server_data['ip'],
-                    port=server_data.get('port', 5900),
-                    group_id=group_id,
-                    is_favorite=server_data.get('is_favorite', False),
-                    comment=server_data.get('comment', '')
-                )
-                db.session.add(server)
-        
-        printers_data = data.get('printers', [])
-        for printer_data in printers_data:
-            group_id = group_map.get(printer_data.get('group_id')) if printer_data.get('group_id') else None
-            
-            if Printer.query.filter_by(ip=printer_data['ip']).first():
-                # Обновляем существующий принтер
-                printer = Printer.query.filter_by(ip=printer_data['ip']).first()
-                printer.name = printer_data['name']
-                printer.group_id = group_id
-                printer.web_interface = printer_data.get('web_interface', '')
-                printer.comment = printer_data.get('comment', '')
-            else:
-                # Создаем новый принтер
-                printer = Printer(
-                    name=printer_data['name'],
-                    ip=printer_data['ip'],
-                    group_id=group_id,
-                    web_interface=printer_data.get('web_interface', ''),
-                    comment=printer_data.get('comment', '')
-                )
-                db.session.add(printer)
-        
-        db.session.commit()
-        
+        data = get_json()
+        import_data_core(data)
         return jsonify({'success': True, 'message': 'Данные успешно импортированы'})
-        
+    except ValueError as e:
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
@@ -1399,7 +1583,7 @@ def get_settings():
 def update_settings():
     """Обновить настройки"""
     try:
-        data = request.json
+        data = get_json()
         
         for key, value in data.items():
             setting = Settings.query.filter_by(key=key).first()
@@ -1592,130 +1776,125 @@ def delete_subnet_name(subnet):
         return jsonify({'error': str(e)}), 500
 
 # API для бэкапов и восстановления
-import os
-import json
-from datetime import datetime
 
 @app.route('/api/create_backup', methods=['POST'])
 def create_backup():
     try:
         data = request.get_json()
-        
-        # Создаем имя файла с временной меткой
+        if data is None:
+            return jsonify({'error': 'Нет данных для бэкапа'}), 400
+
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"backup_{timestamp}.json"
-        backup_path = os.path.join('backups', filename)
-        
-        # Убеждаемся, что папка существует
-        os.makedirs('backups', exist_ok=True)
-        
-        # Сохраняем бэкап
+        backup_path = os.path.join(BACKUPS_DIR, filename)
+
         with open(backup_path, 'w', encoding='utf-8') as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
-        
+
         return jsonify({
             'success': True,
             'filename': filename,
             'message': f'Backup создан: {filename}'
         })
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/backups', methods=['GET'])
 def list_backups():
     try:
-        backups_dir = 'backups'
-        if not os.path.exists(backups_dir):
+        if not os.path.exists(BACKUPS_DIR):
             return jsonify({'success': True, 'backups': []})
-        
+
         backups = []
-        for filename in os.listdir(backups_dir):
-            if filename.endswith('.json'):
-                filepath = os.path.join(backups_dir, filename)
-                stat = os.stat(filepath)
-                
-                # Читаем метаданные из файла
-                try:
-                    with open(filepath, 'r', encoding='utf-8') as f:
-                        backup_data = json.load(f)
-                        app_title = backup_data.get('appTitle', 'VNC Manager')
-                        timestamp = backup_data.get('timestamp', '')
-                        comment = backup_data.get('comment', '')
-                except:
-                    app_title = 'VNC Manager'
-                    timestamp = ''
-                    comment = ''
-                
-                backups.append({
-                    'filename': filename,
-                    'timestamp': timestamp,
-                    'appTitle': app_title,
-                    'comment': comment,
-                    'size': stat.st_size,
-                    'created': datetime.fromtimestamp(stat.st_ctime).isoformat()
-                })
-        
-        # Сортируем по времени создания (новые первые)
+        for filename in os.listdir(BACKUPS_DIR):
+            if not BACKUP_FILENAME_RE.fullmatch(filename):
+                continue
+            filepath = os.path.join(BACKUPS_DIR, filename)
+            stat = os.stat(filepath)
+
+            try:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    backup_data = json.load(f)
+                    app_title = backup_data.get('appTitle', 'VNC Manager')
+                    timestamp = backup_data.get('timestamp', '')
+                    comment = backup_data.get('comment', '')
+            except (OSError, json.JSONDecodeError):
+                app_title = 'VNC Manager'
+                timestamp = ''
+                comment = ''
+
+            backups.append({
+                'filename': filename,
+                'timestamp': timestamp,
+                'appTitle': app_title,
+                'comment': comment,
+                'size': stat.st_size,
+                'created': datetime.fromtimestamp(stat.st_ctime).isoformat()
+            })
+
         backups.sort(key=lambda x: x['created'], reverse=True)
-        
         return jsonify({'success': True, 'backups': backups})
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/restore_backup/<filename>', methods=['POST'])
 def restore_backup(filename):
     try:
-        backup_path = os.path.join('backups', filename)
-        
-        if not os.path.exists(backup_path):
+        backup_path = _safe_backup_path(filename)
+        if not backup_path or not os.path.exists(backup_path):
             return jsonify({'error': 'Файл бэкапа не найден'}), 404
-        
-        # Читаем данные из бэкапа
+
         with open(backup_path, 'r', encoding='utf-8') as f:
             backup_data = json.load(f)
-        
-        # Восстанавливаем данные
-        # Здесь можно добавить логику восстановления разных типов данных
-        
+
+        import_data_core(_backup_to_import_payload(backup_data))
+
         return jsonify({
             'success': True,
             'message': f'Данные восстановлены из {filename}'
         })
-        
+
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
     except Exception as e:
+        db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/delete_backups', methods=['POST'])
 def delete_backups():
     try:
-        data = request.get_json()
+        data = request.get_json() or {}
         filenames = data.get('filenames', [])
-        
+
         if not filenames:
             return jsonify({'error': 'Не указаны файлы для удаления'}), 400
-        
+
         deleted_count = 0
         errors = []
-        
+
         for filename in filenames:
-            backup_path = os.path.join('backups', filename)
+            backup_path = _safe_backup_path(filename)
             try:
-                if os.path.exists(backup_path):
+                if backup_path and os.path.exists(backup_path):
                     os.remove(backup_path)
                     deleted_count += 1
                 else:
                     errors.append(f'Файл {filename} не найден')
-            except Exception as e:
+            except OSError as e:
                 errors.append(f'Ошибка удаления {filename}: {str(e)}')
-        
+
         return jsonify({
             'success': True,
             'deleted_count': deleted_count,
             'errors': errors
         })
-        
+
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1733,5 +1912,6 @@ if __name__ == '__main__':
     print("Откройте в браузере: http://localhost:5000")
     print("Доступно по сети: http://<ваш_ip>:5000")
     print("=" * 50)
-    
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+
+    debug = os.environ.get('FLASK_DEBUG', '0').strip().lower() in {'1', 'true', 'yes', 'on'}
+    app.run(debug=debug, host='0.0.0.0', port=5000, use_reloader=False)
