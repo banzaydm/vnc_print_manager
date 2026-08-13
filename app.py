@@ -588,7 +588,13 @@ def login():
             error = 'Неверный логин или пароль'
 
     need_setup = User.query.count() == 0
-    return _render_login(error=error, need_setup=need_setup)
+    return _render_login(
+        error=error,
+        need_setup=need_setup,
+        app_title=_get_setting('app_title', 'VNC Manager'),
+        favicon_path=_get_setting('favicon_path', ''),
+        logo_path=_get_setting('logo_path', ''),
+    )
 
 
 @app.route('/logout')
@@ -1679,10 +1685,24 @@ def novnc_page(server_id):
           openPwModal();
         }});
 
-        // Двусторонний буфер обмена: приём текста с удалённой машины
+        // Двусторонний буфер обмена: приём текста с удалённой машины.
+        // noVNC в legacy-режиме отдаёт "сырые" байты (каждый символ ≤ 255),
+        // а в extended-режиме уже декодирует UTF-8 (символы > 255).
+        // Кодировку legacy-байтов определяем: пробуем UTF-8, затем Windows-1251
+        // (TightVNC/UltraVNC на русской Windows передают буфер в ANSI — CP1251).
         rfb.addEventListener('clipboard', (e) => {{
-          const text = e?.detail?.text;
+          let text = e?.detail?.text;
           if (!text) return;
+          if (text.charCodeAt(text.length - 1) === 0) {{
+            text = text.slice(0, -1);
+          }}
+          let isRawBytes = true;
+          for (let i = 0; i < text.length; i++) {{
+            if (text.charCodeAt(i) > 255) {{ isRawBytes = false; break; }}
+          }}
+          if (isRawBytes) {{
+            text = decodeClipboardBytes(text);
+          }}
           writeToLocalClipboard(text);
         }});
 
@@ -1710,6 +1730,69 @@ def novnc_page(server_id):
     const clipCapture = document.getElementById('clipCapture');
     const clipToast = document.getElementById('clipToast');
     let clipToastTimer = null;
+
+    // Кодировка legacy-буфера. По умолчанию CP1251: TightVNC на русской Windows
+    // передаёт клиенту буфер в системной ANSI-кодировке. После первого приёма
+    // автоматически обновляется по факту декодирования (utf8 или cp1251).
+    let clipEncoding = 'cp1251';
+
+    // Таблица Windows-1251 для байтов 0x80..0xFF (эталон — кодек Python cp1251)
+    const CP1251_TABLE = [
+      0x0402,0x0403,0x201A,0x0453,0x201E,0x2026,0x2020,0x2021,
+      0x20AC,0x2030,0x0409,0x2039,0x040A,0x040C,0x040B,0x040F,
+      0x0452,0x2018,0x2019,0x201C,0x201D,0x2022,0x2013,0x2014,
+      0xFFFD,0x2122,0x0459,0x203A,0x045A,0x045C,0x045B,0x045F,
+      0x00A0,0x040E,0x045E,0x0408,0x00A4,0x0490,0x00A6,0x00A7,
+      0x0401,0x00A9,0x0404,0x00AB,0x00AC,0x00AD,0x00AE,0x0407,
+      0x00B0,0x00B1,0x0406,0x0456,0x0491,0x00B5,0x00B6,0x00B7,
+      0x0451,0x2116,0x0454,0x00BB,0x0458,0x0405,0x0455,0x0457,
+      0x0410,0x0411,0x0412,0x0413,0x0414,0x0415,0x0416,0x0417,
+      0x0418,0x0419,0x041A,0x041B,0x041C,0x041D,0x041E,0x041F,
+      0x0420,0x0421,0x0422,0x0423,0x0424,0x0425,0x0426,0x0427,
+      0x0428,0x0429,0x042A,0x042B,0x042C,0x042D,0x042E,0x042F,
+      0x0430,0x0431,0x0432,0x0433,0x0434,0x0435,0x0436,0x0437,
+      0x0438,0x0439,0x043A,0x043B,0x043C,0x043D,0x043E,0x043F,
+      0x0440,0x0441,0x0442,0x0443,0x0444,0x0445,0x0446,0x0447,
+      0x0448,0x0449,0x044A,0x044B,0x044C,0x044D,0x044E,0x044F
+    ];
+    const CP1251_REV = new Map();
+    for (let i = 0; i < CP1251_TABLE.length; i++) CP1251_REV.set(CP1251_TABLE[i], 0x80 + i);
+
+    function decodeCp1251(bytes) {{
+      let out = '';
+      for (let i = 0; i < bytes.length; i++) {{
+        const b = bytes[i];
+        out += String.fromCharCode(b < 0x80 ? b : CP1251_TABLE[b - 0x80]);
+      }}
+      return out;
+    }}
+
+    function decodeClipboardBytes(text) {{
+      const bytes = new Uint8Array(text.length);
+      for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i);
+      try {{
+        const decoded = new TextDecoder('utf-8', {{ fatal: true }}).decode(bytes);
+        clipEncoding = 'utf8';
+        return decoded;
+      }} catch (_) {{
+        clipEncoding = 'cp1251';
+        return decodeCp1251(bytes);
+      }}
+    }}
+
+    function encodeCp1251String(str) {{
+      let out = '';
+      for (const ch of str) {{
+        const cp = ch.codePointAt(0);
+        if (cp < 0x80) {{
+          out += ch;
+        }} else {{
+          const byte = CP1251_REV.get(cp);
+          out += byte === undefined ? '?' : String.fromCharCode(byte);
+        }}
+      }}
+      return out;
+    }}
 
     function showClipToast(text) {{
       clipToast.textContent = text;
@@ -1745,7 +1828,27 @@ def novnc_page(server_id):
 
     function sendToRemote(text) {{
       if (!text || !rfb) return;
-      try {{ rfb.clipboardPasteFrom(text); }} catch (_) {{}}
+      try {{
+        // Extended clipboard (UTF-8) noVNC обрабатывает сам.
+        // В legacy-режиме noVNC кодирует текст как Latin-1 и заменяет символы
+        // > 0xff на '?' (кириллица ломается). Кодируем сами в соответствии с
+        // кодировкой, определённой при приёме (CP1251 для TightVNC), и передаём
+        // байты как "latin1"-строку — noVNC отправит их как есть.
+        const extText = !!(rfb._clipboardServerCapabilitiesFormats &&
+                           rfb._clipboardServerCapabilitiesFormats[1] &&
+                           rfb._clipboardServerCapabilitiesActions &&
+                           rfb._clipboardServerCapabilitiesActions[1 << 27]);
+        if (extText) {{
+          rfb.clipboardPasteFrom(text);
+        }} else if (clipEncoding === 'cp1251') {{
+          rfb.clipboardPasteFrom(encodeCp1251String(text));
+        }} else {{
+          const bytes = new TextEncoder().encode(text);
+          let latin = '';
+          for (let i = 0; i < bytes.length; i++) latin += String.fromCharCode(bytes[i]);
+          rfb.clipboardPasteFrom(latin);
+        }}
+      }} catch (_) {{}}
       showClipToast('Отправлено на удалённую машину');
     }}
 
@@ -2040,6 +2143,13 @@ def import_data():
         return jsonify({'error': str(e)}), 500
 
 # API для настроек
+def _get_setting(key, default=None):
+    setting = Settings.query.filter_by(key=key).first()
+    if setting and setting.value:
+        return setting.value
+    return default
+
+
 @app.route('/api/settings', methods=['GET'])
 def get_settings():
     """Получить все настройки"""

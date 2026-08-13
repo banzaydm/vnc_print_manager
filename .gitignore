@@ -19,6 +19,9 @@ instance/novnc_tokens.txt
 instance/secret_key
 instance/backups/
 
+# Загруженные через настройки изображения (favicon/логотип) — runtime-данные
+uploads/
+
 # Virtual environment
 venv/
 env/

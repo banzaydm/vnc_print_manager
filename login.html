@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Вход — VNC Manager</title>
+  <title>{% if app_title %}Вход — {{ app_title }}{% else %}Вход — VNC Manager{% endif %}</title>
+  {% if favicon_path %}<link rel="icon" href="{{ favicon_path }}" />{% endif %}
   <style>
     * { box-sizing: border-box; }
     html, body {
@@ -99,9 +100,13 @@
   <div class="wrap">
     <div class="card">
       <div class="logo">
-        <div class="dot">V</div>
+        {% if logo_path %}
+          <img src="{{ logo_path }}" alt="Логотип" style="height: 34px; max-width: 130px; object-fit: contain;" />
+        {% else %}
+          <div class="dot">V</div>
+        {% endif %}
         <div>
-          <strong>VNC &amp; Printer Manager</strong>
+          <strong>{% if app_title %}{{ app_title }}{% else %}VNC Manager{% endif %}</strong>
           <span>Управление подключениями</span>
         </div>
       </div>
