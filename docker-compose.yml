@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  vnc-print-manager:
+    build: .
+    image: vnc-print-manager:local
+    ports:
+      - "5000:5000"  # Веб-интерфейс
+      - "6080:6080"  # noVNC WebSocket прокси (websockify запускается внутри контейнера)
+    volumes:
+      - vnc_manager_data:/app/instance  # БД, бэкапы, токены noVNC
+    environment:
+      - FLASK_APP=app.py
+      - FLASK_ENV=production
+      - FLASK_DEBUG=0
+      - NOVNC_PROXY_PORT=6080
+      - NOVNC_TOKEN_TTL_SECONDS=600
+      - INIT_DB_ON_START=1
+      - SEED_DEMO_DATA=0
+      - START_WEBSOCKIFY=1  # run.py сам запускает websockify внутри контейнера
+      # - API_KEY=your-secret-key
+    restart: unless-stopped
+    networks:
+      - vnc_net
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',5000)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  vnc_manager_data:
+    driver: local
+
+networks:
+  vnc_net:
+    driver: bridge
