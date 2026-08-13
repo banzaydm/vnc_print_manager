@@ -7,13 +7,14 @@ import threading
 import time
 import json
 import re
+import hmac
 from datetime import datetime
+from urllib.parse import urlsplit
 import platform
-from pathlib import Path
 import ipaddress
 import concurrent.futures
 from markupsafe import escape
-from models import db, Group, Server, Printer, Settings, SubnetName
+from models import db, Group, Server, Printer, Settings, SubnetName, utcnow
 from sqlalchemy import text
 
 app = Flask(__name__, static_folder='.', static_url_path='')
@@ -24,7 +25,6 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 db.init_app(app)
 
-APP_BUILD_ID = f"{int(time.time())}:{Path(__file__).name}"
 API_KEY = os.environ.get('API_KEY', '').strip()
 STATUS_CACHE_TTL = int(os.environ.get('STATUS_CACHE_TTL', '30'))
 BACKUPS_DIR = os.path.join(app.instance_path, 'backups')
@@ -36,15 +36,12 @@ NOVNC_WS_PATH = os.environ.get("NOVNC_WS_PATH", "").strip()
 NOVNC_CDN_VERSION = os.environ.get("NOVNC_CDN_VERSION", "1.5.0")
 _NOVNC_TOKEN_FILE = os.path.join(app.instance_path, "novnc_tokens.txt")
 
-_PROTECTED_API_PREFIXES = (
-    '/api/admin/',
-    '/api/import',
-    '/api/export',
-    '/api/create_backup',
-    '/api/restore_backup/',
-    '/api/delete_backups',
-)
-_PROTECTED_API_EXACT = frozenset({'/api/import'})
+# Эндпоинты, доступные без API-ключа.
+# По умолчанию защищены ВСЕ /api/* — новый эндпоинт нельзя «забыть» в списке.
+_PUBLIC_API_EXACT = frozenset({
+    '/api/config',
+    '/api/settings',
+})
 
 _status_cache = {}
 _status_cache_lock = threading.Lock()
@@ -55,6 +52,17 @@ def get_json():
     return request.get_json(silent=True) or {}
 
 
+def _normalize_port(value, default=5900):
+    """Возвращает валидный порт (1-65535) или None."""
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return None
+    if 1 <= port <= 65535:
+        return port
+    return None
+
+
 def _safe_backup_path(filename: str):
     if not filename or not BACKUP_FILENAME_RE.fullmatch(filename):
         return None
@@ -62,6 +70,12 @@ def _safe_backup_path(filename: str):
     if os.path.realpath(path).startswith(os.path.realpath(BACKUPS_DIR)):
         return path
     return None
+
+
+def _is_protected_api(path: str) -> bool:
+    if path in _PUBLIC_API_EXACT:
+        return False
+    return path.startswith('/api/')
 
 
 def _extract_api_key():
@@ -74,17 +88,10 @@ def _extract_api_key():
 def _require_api_key():
     if not API_KEY:
         return None
-    if _extract_api_key() != API_KEY:
+    provided = _extract_api_key()
+    if not provided or not hmac.compare_digest(provided, API_KEY):
         return jsonify({'error': 'Требуется API ключ'}), 401
     return None
-
-
-def _is_protected_api(path: str) -> bool:
-    if path.startswith('/api/novnc/') and path.endswith('/token'):
-        return True
-    if path in _PROTECTED_API_EXACT:
-        return True
-    return any(path.startswith(prefix) for prefix in _PROTECTED_API_PREFIXES)
 
 
 def get_server_status_cached(ip, port):
@@ -113,17 +120,31 @@ def get_printer_status_cached(ip):
     return online
 
 
-@app.route('/api/debug/routes', methods=['GET'])
-def debug_routes():
-    routes = []
-    for rule in app.url_map.iter_rules():
-        if rule.rule in (
-            '/api/favorites/<string:device_type>/<int:device_id>',
-            '/api/admin/clear_db',
-            '/api/<path:any_path>',
-        ):
-            routes.append({'rule': rule.rule, 'methods': sorted(list(rule.methods or []))})
-    return jsonify({'build_id': APP_BUILD_ID, 'routes': routes})
+def _fetch_statuses_parallel(items, is_printer=False):
+    """Параллельно проверяет статусы устройств, возвращает {id: bool}.
+
+    Отдельные ошибки проб не роняют общий запрос — такие устройства
+    помечаются как offline.
+    """
+    result = {}
+    if not items:
+        return result
+
+    def probe(item):
+        if is_printer:
+            return item.id, get_printer_status_cached(item.ip)
+        return item.id, get_server_status_cached(item.ip, item.port)
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(items))) as executor:
+        future_to_item = {executor.submit(probe, item): item for item in items}
+        for future in concurrent.futures.as_completed(future_to_item):
+            try:
+                dev_id, online = future.result()
+                result[dev_id] = online
+            except Exception:
+                dev_id = future_to_item[future].id
+                result[dev_id] = False
+    return result
 
 
 @app.after_request
@@ -150,16 +171,28 @@ def api_config():
 
 
 @app.before_request
-def _api_auth_and_logging():
-    if request.path.startswith('/api/favorites/') or request.path == '/api/admin/clear_db':
-        try:
-            app.logger.info('API request: %s %s', request.method, request.path)
-        except Exception:
-            pass
-
+def _api_auth_and_csrf():
+    if not request.path.startswith('/api/'):
+        return None
     if request.method == 'OPTIONS':
         return None
-    if request.path.startswith('/api/') and _is_protected_api(request.path):
+
+    # Защита от CSRF: для state-changing запросов Origin (если прислан)
+    # должен совпадать с Host запроса. Сравниваем hostname без порта,
+    # чтобы не ломать работу за reverse proxy. Запросы без Origin
+    # (небраузерные клиенты) не блокируются.
+    if request.method in ('POST', 'PUT', 'DELETE', 'PATCH'):
+        origin = request.headers.get('Origin')
+        if origin:
+            try:
+                origin_hostname = urlsplit(origin).hostname
+                request_hostname = urlsplit('http://' + request.host).hostname
+            except ValueError:
+                origin_hostname = request_hostname = None
+            if origin_hostname and origin_hostname != request_hostname:
+                return jsonify({'error': 'Cross-origin request forbidden'}), 403
+
+    if _is_protected_api(request.path):
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
@@ -207,48 +240,39 @@ def _write_novnc_token_file_locked() -> None:
     os.replace(tmp, _NOVNC_TOKEN_FILE)
 
 
+def _ensure_column(table_name: str, column: str, alter_sql: str):
+    """Добавляет колонку в существующую таблицу SQLite, если её ещё нет."""
+    try:
+        cols = [r[1] for r in db.session.execute(text(f"PRAGMA table_info({table_name})"))]
+        if column not in cols:
+            db.session.execute(text(alter_sql))
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+
+
 def init_db():
-    """Инициализация базы данных с тестовыми данными"""
+    """Инициализация базы данных и лёгкие миграции для существующих БД"""
     with app.app_context():
         db.create_all()
 
-        # Миграция: добавляем колонку is_favorite в таблицу printer, если её нет (для существующих БД)
-        try:
-            cols = [r[1] for r in db.session.execute(text("PRAGMA table_info(printer)"))]
-            if 'is_favorite' not in cols:
-                db.session.execute(text("ALTER TABLE printer ADD COLUMN is_favorite BOOLEAN DEFAULT 0"))
-                db.session.commit()
-        except Exception:
-            db.session.rollback()
+        # Миграции: добавляем колонки is_favorite в существующие таблицы
+        _ensure_column('printer', 'is_favorite', "ALTER TABLE printer ADD COLUMN is_favorite BOOLEAN DEFAULT 0")
+        _ensure_column('server', 'is_favorite', "ALTER TABLE server ADD COLUMN is_favorite BOOLEAN DEFAULT 0")
 
-        # Миграция: добавляем колонку is_favorite в таблицу server, если её нет (для существующих БД)
-        try:
-            cols = [r[1] for r in db.session.execute(text("PRAGMA table_info(server)"))]
-            if 'is_favorite' not in cols:
-                db.session.execute(text("ALTER TABLE server ADD COLUMN is_favorite BOOLEAN DEFAULT 0"))
-                db.session.commit()
-        except Exception:
-            db.session.rollback()
-        
-        # Миграция: добавляем таблицу settings, если её нет
-        try:
-            db.session.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'"))
-            if not db.session.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'")).fetchone():
-                db.create_all()
-                # Добавляем настройки по умолчанию
-                default_settings = [
-                    Settings(key='theme', value='light', type='string', description='Цветовая тема (light/dark)'),
-                    Settings(key='favicon_path', value='', type='string', description='Путь к файлу favicon'),
-                    Settings(key='logo_path', value='', type='string', description='Путь к файлу логотипа'),
-                    Settings(key='app_title', value='VNC Manager', type='string', description='Заголовок приложения'),
-                    Settings(key='primary_color', value='#4a6cf7', type='string', description='Основной цвет темы'),
-                    Settings(key='custom_css', value='', type='string', description='Пользовательские CSS стили')
-                ]
-                for setting in default_settings:
-                    db.session.add(setting)
-                db.session.commit()
-        except Exception:
-            db.session.rollback()
+        # Настройки по умолчанию (только если таблица пуста)
+        if Settings.query.count() == 0:
+            default_settings = [
+                Settings(key='theme', value='light', type='string', description='Цветовая тема (light/dark)'),
+                Settings(key='favicon_path', value='', type='string', description='Путь к файлу favicon'),
+                Settings(key='logo_path', value='', type='string', description='Путь к файлу логотипа'),
+                Settings(key='app_title', value='VNC Manager', type='string', description='Заголовок приложения'),
+                Settings(key='primary_color', value='#4a6cf7', type='string', description='Основной цвет темы'),
+                Settings(key='custom_css', value='', type='string', description='Пользовательские CSS стили')
+            ]
+            for setting in default_settings:
+                db.session.add(setting)
+            db.session.commit()
         
         seed_demo = os.environ.get('SEED_DEMO_DATA', '0').strip().lower() in {'1', 'true', 'yes', 'on'}
         # Создаем тестовые группы если их нет (только при явном SEED_DEMO_DATA=1)
@@ -465,6 +489,7 @@ def delete_group(group_id):
 @app.route('/api/servers', methods=['GET'])
 def get_servers():
     servers = Server.query.order_by(Server.name).all()
+    statuses = _fetch_statuses_parallel(servers)
     result = []
     for server in servers:
         server_dict = {
@@ -477,7 +502,7 @@ def get_servers():
             'last_seen': server.last_seen.isoformat() if server.last_seen else None,
             'comment': server.comment,
             'created_at': server.created_at.isoformat() if server.created_at else None,
-            'status': 'online' if get_server_status_cached(server.ip, server.port) else 'offline'
+            'status': 'online' if statuses.get(server.id) else 'offline'
         }
         
         if server.group:
@@ -493,7 +518,11 @@ def add_server():
     data = get_json()
     if not data.get('name') or not data.get('ip'):
         return jsonify({'error': 'Укажите название и IP'}), 400
-    
+
+    port = _normalize_port(data.get('port', 5900))
+    if port is None:
+        return jsonify({'error': 'Порт должен быть числом от 1 до 65535'}), 400
+
     # Проверка на дубликат IP
     if Server.query.filter_by(ip=data['ip']).first():
         return jsonify({'error': 'IP адрес уже существует'}), 400
@@ -501,7 +530,7 @@ def add_server():
     server = Server(
         name=data['name'],
         ip=data['ip'],
-        port=data.get('port', 5900),
+        port=port,
         group_id=data.get('group_id'),
         comment=data.get('comment', '')
     )
@@ -529,7 +558,10 @@ def server_api(server_id):
         if 'ip' in data:
             server.ip = data['ip']
         if 'port' in data:
-            server.port = data['port']
+            port = _normalize_port(data['port'])
+            if port is None:
+                return jsonify({'error': 'Порт должен быть числом от 1 до 65535'}), 400
+            server.port = port
         if 'group_id' in data:
             server.group_id = data['group_id']
         if 'comment' in data:
@@ -550,9 +582,9 @@ def server_api(server_id):
 def printers_api():
     if request.method == 'GET':
         printers = Printer.query.order_by(Printer.name).all()
+        statuses = _fetch_statuses_parallel(printers, is_printer=True)
         result = []
         for printer in printers:
-            is_online = get_printer_status_cached(printer.ip)
             printer_dict = {
                 'id': printer.id,
                 'name': printer.name,
@@ -560,7 +592,7 @@ def printers_api():
                 'group_id': printer.group_id,
                 'web_interface': printer.web_interface,
                 'is_favorite': bool(getattr(printer, 'is_favorite', False)),
-                'status': 'online' if is_online else 'offline',
+                'status': 'online' if statuses.get(printer.id) else 'offline',
                 'comment': printer.comment,
                 'created_at': printer.created_at.isoformat() if printer.created_at else None
             }
@@ -1232,7 +1264,10 @@ def novnc_page(server_id):
     async function connect() {{
       try {{
         setStatus('Получаю токен…');
-        const resp = await fetch(`/api/novnc/${{serverId}}/token`, {{ method: 'POST' }});
+        const headers = {{}};
+        const apiKey = localStorage.getItem('vnc_api_key');
+        if (apiKey) headers['X-API-Key'] = apiKey;
+        const resp = await fetch(`/api/novnc/${{serverId}}/token`, {{ method: 'POST', headers }});
         const data = await resp.json();
         if (!resp.ok || !data.success) {{
           throw new Error(data.message || 'Не удалось получить токен');
@@ -1322,7 +1357,10 @@ def export_data():
         groups = Group.query.all()
         servers = Server.query.all()
         printers = Printer.query.all()
-        
+
+        server_statuses = _fetch_statuses_parallel(servers)
+        printer_statuses = _fetch_statuses_parallel(printers, is_printer=True)
+
         groups_data = []
         for group in groups:
             groups_data.append({
@@ -1344,7 +1382,7 @@ def export_data():
                 'last_seen': server.last_seen.isoformat() if server.last_seen else None,
                 'comment': server.comment,
                 'created_at': server.created_at.isoformat() if server.created_at else None,
-                'status': 'online' if get_server_status_cached(server.ip, server.port) else 'offline'
+                'status': 'online' if server_statuses.get(server.id) else 'offline'
             })
         
         printers_data = []
@@ -1356,7 +1394,7 @@ def export_data():
                 'group_id': printer.group_id,
                 'web_interface': printer.web_interface,
                 'is_favorite': bool(getattr(printer, 'is_favorite', False)),
-                'status': 'online' if get_printer_status_cached(printer.ip) else 'offline',
+                'status': 'online' if printer_statuses.get(printer.id) else 'offline',
                 'comment': printer.comment,
                 'created_at': printer.created_at.isoformat() if printer.created_at else None
             })
@@ -1540,7 +1578,7 @@ def import_data_core(data):
             setting = Settings.query.filter_by(key=key).first()
             if setting:
                 setting.value = str(value)
-                setting.updated_at = datetime.utcnow()
+                setting.updated_at = utcnow()
             else:
                 db.session.add(Settings(key=key, value=str(value), type='string', description=f'Настройка {key}'))
 
@@ -1596,7 +1634,7 @@ def update_settings():
                     setting.value = str(value)
                 else:
                     setting.value = str(value)
-                setting.updated_at = datetime.utcnow()
+                setting.updated_at = utcnow()
             else:
                 # Создаем новую настройку
                 setting_type = 'string'
@@ -1625,96 +1663,108 @@ def update_settings():
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
 
+_UPLOAD_EXT_ALLOWED = {
+    'favicon': {'ico', 'png', 'jpg', 'jpeg', 'gif', 'svg'},
+    'logo': {'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'},
+}
+
+_IMAGE_MAGIC_BYTES = {
+    'png': (b'\x89PNG\r\n\x1a\n',),
+    'jpg': (b'\xff\xd8\xff',),
+    'jpeg': (b'\xff\xd8\xff',),
+    'gif': (b'GIF87a', b'GIF89a'),
+    'ico': (b'\x00\x00\x01\x00',),
+    'webp': (b'RIFF',),
+}
+
+
+def _validate_image_content(file, ext):
+    """Проверяет, что содержимое файла соответствует заявленному расширению.
+
+    Для SVG отклоняет файлы с исполняемым содержимым (<script>, обработчики
+    событий, javascript:), которые могут привести к XSS при отдаче из своего
+    origin.
+    """
+    file.seek(0)
+    head = file.read(64)
+    file.seek(0)
+
+    if ext == 'svg':
+        body = (head + file.read(16384)).lower()
+        file.seek(0)
+        if b'<svg' not in body:
+            return False
+        if any(marker in body for marker in (
+            b'<script', b'onload=', b'onerror=', b'onclick=',
+            b'javascript:', b'<foreignobject',
+        )):
+            return False
+        return True
+
+    expected = _IMAGE_MAGIC_BYTES.get(ext)
+    if not expected:
+        return True
+    return any(head.startswith(m) for m in expected)
+
+
+def _save_uploaded_image(file_field, setting_key, base_name):
+    """Валидирует и сохраняет загруженное изображение, обновляет настройку."""
+    if file_field not in request.files:
+        return jsonify({'error': 'Файл не загружен'}), 400
+
+    file = request.files[file_field]
+    if file.filename == '':
+        return jsonify({'error': 'Файл не выбран'}), 400
+
+    dot = file.filename.rfind('.')
+    if dot == -1:
+        return jsonify({'error': 'Неверный формат файла'}), 400
+    ext = file.filename[dot + 1:].lower()
+    if ext not in _UPLOAD_EXT_ALLOWED[base_name]:
+        return jsonify({'error': 'Неверный формат файла'}), 400
+
+    if not _validate_image_content(file, ext):
+        return jsonify({'error': 'Файл повреждён или содержит недопустимое содержимое'}), 400
+
+    static_dir = os.path.join(app.static_folder, 'uploads')
+    os.makedirs(static_dir, exist_ok=True)
+
+    filename = f"{base_name}.{ext}"
+    file_path = os.path.join(static_dir, filename)
+    file.save(file_path)
+
+    setting = Settings.query.filter_by(key=setting_key).first()
+    if setting:
+        setting.value = f"uploads/{filename}"
+        setting.updated_at = utcnow()
+    else:
+        setting = Settings(
+            key=setting_key,
+            value=f"uploads/{filename}",
+            type='string',
+            description=f'Путь к файлу {base_name}'
+        )
+        db.session.add(setting)
+
+    db.session.commit()
+    return jsonify({'success': True, 'path': f"uploads/{filename}"})
+
+
 @app.route('/api/settings/upload_favicon', methods=['POST'])
 def upload_favicon():
     """Загрузить favicon"""
     try:
-        if 'favicon' not in request.files:
-            return jsonify({'error': 'Файл не загружен'}), 400
-        
-        file = request.files['favicon']
-        if file.filename == '':
-            return jsonify({'error': 'Файл не выбран'}), 400
-        
-        # Проверяем расширение файла
-        allowed_extensions = {'ico', 'png', 'jpg', 'jpeg', 'gif', 'svg'}
-        if not ('.' in file.filename and 
-                file.filename.rsplit('.', 1)[1].lower() in allowed_extensions):
-            return jsonify({'error': 'Неверный формат файла. Разрешены: ico, png, jpg, jpeg, gif, svg'}), 400
-        
-        # Создаем директорию для статических файлов, если её нет
-        static_dir = os.path.join(app.static_folder, 'uploads')
-        os.makedirs(static_dir, exist_ok=True)
-        
-        # Сохраняем файл
-        filename = f"favicon.{file.filename.rsplit('.', 1)[1].lower()}"
-        file_path = os.path.join(static_dir, filename)
-        file.save(file_path)
-        
-        # Обновляем настройку в базе данных
-        setting = Settings.query.filter_by(key='favicon_path').first()
-        if setting:
-            setting.value = f"uploads/{filename}"
-            setting.updated_at = datetime.utcnow()
-        else:
-            setting = Settings(
-                key='favicon_path',
-                value=f"uploads/{filename}",
-                type='string',
-                description='Путь к файлу favicon'
-            )
-            db.session.add(setting)
-        
-        db.session.commit()
-        return jsonify({'success': True, 'path': f"uploads/{filename}"})
-        
+        return _save_uploaded_image('favicon', 'favicon_path', 'favicon')
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/settings/upload_logo', methods=['POST'])
 def upload_logo():
     """Загрузить логотип"""
     try:
-        if 'logo' not in request.files:
-            return jsonify({'error': 'Файл не загружен'}), 400
-        
-        file = request.files['logo']
-        if file.filename == '':
-            return jsonify({'error': 'Файл не выбран'}), 400
-        
-        # Проверяем расширение файла
-        allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp'}
-        if not ('.' in file.filename and 
-                file.filename.rsplit('.', 1)[1].lower() in allowed_extensions):
-            return jsonify({'error': 'Неверный формат файла. Разрешены: png, jpg, jpeg, gif, svg, webp'}), 400
-        
-        # Создаем директорию для статических файлов, если её нет
-        static_dir = os.path.join(app.static_folder, 'uploads')
-        os.makedirs(static_dir, exist_ok=True)
-        
-        # Сохраняем файл
-        filename = f"logo.{file.filename.rsplit('.', 1)[1].lower()}"
-        file_path = os.path.join(static_dir, filename)
-        file.save(file_path)
-        
-        # Обновляем настройку в базе данных
-        setting = Settings.query.filter_by(key='logo_path').first()
-        if setting:
-            setting.value = f"uploads/{filename}"
-            setting.updated_at = datetime.utcnow()
-        else:
-            setting = Settings(
-                key='logo_path',
-                value=f"uploads/{filename}",
-                type='string',
-                description='Путь к файлу логотипа'
-            )
-            db.session.add(setting)
-        
-        db.session.commit()
-        return jsonify({'success': True, 'path': f"uploads/{filename}"})
-        
+        return _save_uploaded_image('logo', 'logo_path', 'logo')
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
