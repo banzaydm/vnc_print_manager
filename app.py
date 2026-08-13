@@ -1243,7 +1243,7 @@ def novnc_page(server_id):
   </div>
 
   <script type="module">
-    import RFB from 'https://cdn.jsdelivr.net/npm/@novnc/novnc@{NOVNC_CDN_VERSION}/core/rfb.js';
+    import RFB from 'https://cdn.jsdelivr.net/gh/novnc/noVNC@v{NOVNC_CDN_VERSION}/core/rfb.js';
 
     const serverId = {server.id};
     const novncWsPath = {json.dumps(ws_path)};
