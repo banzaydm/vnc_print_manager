@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string
 import subprocess
 import os
 import socket
@@ -14,7 +14,8 @@ import platform
 import ipaddress
 import concurrent.futures
 from markupsafe import escape
-from models import db, Group, Server, Printer, Settings, SubnetName, utcnow
+from werkzeug.security import generate_password_hash, check_password_hash
+from models import db, Group, Server, Printer, Settings, SubnetName, User, utcnow
 from sqlalchemy import text
 
 app = Flask(__name__, static_folder='.', static_url_path='')
@@ -29,6 +30,25 @@ API_KEY = os.environ.get('API_KEY', '').strip()
 STATUS_CACHE_TTL = int(os.environ.get('STATUS_CACHE_TTL', '30'))
 BACKUPS_DIR = os.path.join(app.instance_path, 'backups')
 os.makedirs(BACKUPS_DIR, exist_ok=True)
+
+# --- Авторизация через сессии ---
+AUTH_ENABLED = os.environ.get('AUTH_ENABLED', '1').strip().lower() not in {'0', 'false', 'no', 'off'}
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', '').strip()
+if not app.config['SECRET_KEY']:
+    # Постоянный случайный ключ, чтобы сессии переживали перезапуск.
+    _secret_file = os.path.join(app.instance_path, 'secret_key')
+    try:
+        with open(_secret_file, 'r', encoding='utf-8') as f:
+            app.config['SECRET_KEY'] = f.read().strip()
+    except OSError:
+        pass
+    if not app.config['SECRET_KEY']:
+        app.config['SECRET_KEY'] = secrets.token_hex(32)
+        try:
+            with open(_secret_file, 'w', encoding='utf-8') as f:
+                f.write(app.config['SECRET_KEY'])
+        except OSError:
+            pass
 
 NOVNC_PROXY_PORT = int(os.environ.get("NOVNC_PROXY_PORT", "6080"))
 NOVNC_TOKEN_TTL_SECONDS = int(os.environ.get("NOVNC_TOKEN_TTL_SECONDS", "600"))
@@ -92,6 +112,30 @@ def _require_api_key():
     if not provided or not hmac.compare_digest(provided, API_KEY):
         return jsonify({'error': 'Требуется API ключ'}), 401
     return None
+
+
+def _current_user():
+    """Возвращает текущего авторизованного пользователя или None."""
+    if not AUTH_ENABLED:
+        return None
+    user_id = session.get('user_id')
+    if not user_id:
+        return None
+    return User.query.get(user_id)
+
+
+def _is_authenticated():
+    if not AUTH_ENABLED:
+        return True
+    return session.get('user_id') is not None
+
+
+def _require_admin():
+    """True, если текущий запрос выполняется с правами администратора."""
+    if not AUTH_ENABLED:
+        return True
+    user = _current_user()
+    return user is not None and user.role == 'admin'
 
 
 def get_server_status_cached(ip, port):
@@ -193,10 +237,45 @@ def _api_auth_and_csrf():
                 return jsonify({'error': 'Cross-origin request forbidden'}), 403
 
     if _is_protected_api(request.path):
+        if _is_authenticated():
+            return None  # Авторизованная сессия имеет приоритет над API-ключом
         auth_error = _require_api_key()
         if auth_error:
             return auth_error
     return None
+
+
+# Гейт авторизации: защищает страницы приложения и API от анонимного доступа.
+# Статические файлы (style.css, uploads/, login.html и т.п.) остаются публичными.
+_HTML_PAGE_PATHS = frozenset({'/', '/index.html'})
+_PUBLIC_AUTH_PATHS = frozenset({'/login', '/logout', '/api/config'})
+
+
+@app.before_request
+def _auth_gate():
+    if not AUTH_ENABLED:
+        return None
+    if request.method == 'OPTIONS':
+        return None
+    path = request.path
+    if path in _PUBLIC_AUTH_PATHS:
+        return None
+
+    is_api = path.startswith('/api/')
+    is_page = path in _HTML_PAGE_PATHS or path.startswith('/novnc/')
+    if not is_api and not is_page:
+        return None  # статика — публична
+
+    if _is_authenticated():
+        return None
+
+    if is_api:
+        # Внешние клиенты могут работать по API-ключу даже без сессии.
+        if API_KEY and _extract_api_key() and hmac.compare_digest(_extract_api_key(), API_KEY):
+            return None
+        return jsonify({'error': 'Требуется авторизация'}), 401
+
+    return redirect(url_for('login', next=path))
 
 
 @app.errorhandler(404)
@@ -255,6 +334,19 @@ def init_db():
     """Инициализация базы данных и лёгкие миграции для существующих БД"""
     with app.app_context():
         db.create_all()
+
+        # Первый администратор из переменных окружения (AUTH_ENABLED=1).
+        if AUTH_ENABLED and User.query.count() == 0:
+            admin_user = (os.environ.get('ADMIN_USERNAME') or '').strip()
+            admin_pass = os.environ.get('ADMIN_PASSWORD') or ''
+            if admin_user and admin_pass:
+                db.session.add(User(
+                    username=admin_user,
+                    password_hash=generate_password_hash(admin_pass),
+                    role='admin',
+                ))
+                db.session.commit()
+                print(f"Создан администратор '{admin_user}' из переменных окружения")
 
         # Миграции: добавляем колонки is_favorite в существующие таблицы
         _ensure_column('printer', 'is_favorite', "ALTER TABLE printer ADD COLUMN is_favorite BOOLEAN DEFAULT 0")
@@ -426,6 +518,224 @@ def find_vnc_client_linux():
 @app.route('/')
 def index():
     return app.send_static_file('index.html')
+
+
+# --- Авторизация (страница входа) ---
+
+_LOGIN_TEMPLATE_PATH = os.path.join(app.static_folder, 'login.html')
+
+
+def _render_login(**ctx):
+    try:
+        with open(_LOGIN_TEMPLATE_PATH, 'r', encoding='utf-8') as f:
+            tpl = f.read()
+    except OSError:
+        tpl = '<h1>Страница входа не найдена (login.html)</h1>'
+    return render_template_string(tpl, **ctx)
+
+
+def _safe_next_url():
+    """Безопасный next после входа: только локальные пути."""
+    next_url = request.args.get('next') or request.form.get('next') or ''
+    if next_url and next_url.startswith('/') and not next_url.startswith('//'):
+        return next_url
+    return url_for('index')
+
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if not AUTH_ENABLED:
+        return redirect(url_for('index'))
+    if _is_authenticated():
+        return redirect(_safe_next_url())
+
+    error = None
+    if request.method == 'POST':
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
+
+        # Первичная настройка: если пользователей ещё нет — создаём первого администратора.
+        if User.query.count() == 0 and request.form.get('setup') == '1':
+            if len(username) < 3:
+                error = 'Логин должен быть не короче 3 символов'
+            elif len(password) < 6:
+                error = 'Пароль должен быть не короче 6 символов'
+            else:
+                try:
+                    admin = User(
+                        username=username,
+                        password_hash=generate_password_hash(password),
+                        role='admin',
+                    )
+                    db.session.add(admin)
+                    db.session.commit()
+                    session.clear()
+                    session['user_id'] = admin.id
+                    session['username'] = admin.username
+                    session['role'] = admin.role
+                    return redirect(_safe_next_url())
+                except Exception:
+                    db.session.rollback()
+                    error = 'Не удалось создать администратора (возможно, такой логин уже занят)'
+        else:
+            user = User.query.filter_by(username=username).first()
+            if user and check_password_hash(user.password_hash, password):
+                session.clear()
+                session['user_id'] = user.id
+                session['username'] = user.username
+                session['role'] = user.role
+                return redirect(_safe_next_url())
+            error = 'Неверный логин или пароль'
+
+    need_setup = User.query.count() == 0
+    return _render_login(error=error, need_setup=need_setup)
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+
+@app.route('/api/me', methods=['GET'])
+def api_me():
+    """Текущий пользователь. Используется фронтендом для ролей и выхода."""
+    if not AUTH_ENABLED:
+        return jsonify({
+            'authenticated': True,
+            'auth_enabled': False,
+            'username': None,
+            'role': 'admin',
+        })
+    user = _current_user()
+    if not user:
+        return jsonify({'authenticated': False, 'auth_enabled': True}), 401
+    return jsonify({
+        'authenticated': True,
+        'auth_enabled': True,
+        'username': user.username,
+        'role': user.role,
+    })
+
+
+# --- API управления пользователями (только администратор) ---
+
+def _admin_or_error():
+    if _require_admin():
+        return None
+    return jsonify({'error': 'Недостаточно прав'}), 403
+
+
+def _serialize_user(u):
+    return {
+        'id': u.id,
+        'username': u.username,
+        'role': u.role,
+        'created_at': u.created_at.isoformat() if u.created_at else None,
+    }
+
+
+@app.route('/api/users', methods=['GET'])
+def api_users_list():
+    err = _admin_or_error()
+    if err:
+        return err
+    users = User.query.order_by(User.username).all()
+    return jsonify([_serialize_user(u) for u in users])
+
+
+@app.route('/api/users', methods=['POST'])
+def api_users_create():
+    err = _admin_or_error()
+    if err:
+        return err
+    data = get_json()
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
+    role = (data.get('role') or 'user').strip()
+
+    if len(username) < 3:
+        return jsonify({'error': 'Логин должен быть не короче 3 символов'}), 400
+    if len(password) < 6:
+        return jsonify({'error': 'Пароль должен быть не короче 6 символов'}), 400
+    if role not in ('admin', 'user'):
+        return jsonify({'error': 'Роль должна быть admin или user'}), 400
+    if User.query.filter_by(username=username).first():
+        return jsonify({'error': 'Пользователь с таким логином уже существует'}), 400
+
+    user = User(
+        username=username,
+        password_hash=generate_password_hash(password),
+        role=role,
+    )
+    db.session.add(user)
+    db.session.commit()
+    return jsonify({'success': True, 'user': _serialize_user(user)})
+
+
+@app.route('/api/users/<int:user_id>', methods=['PUT'])
+def api_users_update(user_id):
+    err = _admin_or_error()
+    if err:
+        return err
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'Пользователь не найден'}), 404
+
+    data = get_json()
+    if 'username' in data:
+        new_name = (data['username'] or '').strip()
+        if len(new_name) < 3:
+            return jsonify({'error': 'Логин должен быть не короче 3 символов'}), 400
+        duplicate = User.query.filter(User.username == new_name, User.id != user.id).first()
+        if duplicate:
+            return jsonify({'error': 'Пользователь с таким логином уже существует'}), 400
+        user.username = new_name
+        if session.get('user_id') == user.id:
+            session['username'] = user.username
+
+    if 'password' in data and data['password']:
+        if len(data['password']) < 6:
+            return jsonify({'error': 'Пароль должен быть не короче 6 символов'}), 400
+        user.password_hash = generate_password_hash(data['password'])
+
+    if 'role' in data:
+        new_role = (data['role'] or '').strip()
+        if new_role not in ('admin', 'user'):
+            return jsonify({'error': 'Роль должна быть admin или user'}), 400
+        if new_role != user.role and session.get('user_id') == user.id:
+            return jsonify({'error': 'Нельзя менять собственную роль'}), 400
+        # Нельзя снять роль админа у последнего администратора.
+        if user.role == 'admin' and new_role != 'admin':
+            admins = User.query.filter_by(role='admin').count()
+            if admins <= 1:
+                return jsonify({'error': 'Нельзя убрать роль у последнего администратора'}), 400
+        user.role = new_role
+        if session.get('user_id') == user.id:
+            session['role'] = user.role
+
+    db.session.commit()
+    return jsonify({'success': True, 'user': _serialize_user(user)})
+
+
+@app.route('/api/users/<int:user_id>', methods=['DELETE'])
+def api_users_delete(user_id):
+    err = _admin_or_error()
+    if err:
+        return err
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'Пользователь не найден'}), 404
+    if session.get('user_id') == user.id:
+        return jsonify({'error': 'Нельзя удалить самого себя'}), 400
+    if user.role == 'admin':
+        admins = User.query.filter_by(role='admin').count()
+        if admins <= 1:
+            return jsonify({'error': 'Нельзя удалить последнего администратора'}), 400
+
+    db.session.delete(user)
+    db.session.commit()
+    return jsonify({'success': True})
 
 # API для групп
 @app.route('/api/groups', methods=['GET', 'POST'])
@@ -1191,23 +1501,20 @@ def novnc_page(server_id):
       --border: rgba(255,255,255,.12);
     }}
     html, body {{ height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }}
-    .wrap {{ display: grid; grid-template-rows: auto 1fr; height: 100%; }}
-    .top {{
-      display: flex; gap: 12px; align-items: center; justify-content: space-between;
-      padding: 10px 12px; background: var(--panel); border-bottom: 1px solid var(--border);
-    }}
-    .title {{ display: flex; flex-direction: column; gap: 2px; min-width: 0; }}
-    .title strong {{ font-size: 14px; }}
-    .title span {{ font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
-    .actions {{ display: flex; gap: 8px; align-items: center; flex-shrink: 0; }}
+    .wrap {{ height: 100%; }}
     button {{
       height: 34px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer;
       padding: 0 10px; color: var(--text); background: var(--btn2);
     }}
     button.primary {{ background: var(--btn); border-color: rgba(37,99,235,.6); }}
-    #status {{ font-size: 12px; color: var(--muted); }}
-    #status.ok {{ color: var(--ok); }}
-    #status.bad {{ color: var(--bad); }}
+    .status-badge {{
+      position: fixed; top: 10px; right: 10px; z-index: 50;
+      font-size: 11px; color: var(--text); background: var(--panel);
+      border: 1px solid var(--border); border-radius: 6px; padding: 3px 8px;
+      pointer-events: none; opacity: .92;
+    }}
+    .status-badge.ok {{ color: var(--ok); }}
+    .status-badge.bad {{ color: var(--bad); }}
     #screen {{
       width: 100%;
       height: 100%;
@@ -1224,23 +1531,66 @@ def novnc_page(server_id):
       width: auto !important;
       height: auto !important;
     }}
+    .pw-overlay {{
+      position: fixed; inset: 0; background: rgba(0,0,0,.55);
+      display: none; align-items: center; justify-content: center; z-index: 100;
+    }}
+    .pw-overlay.open {{ display: flex; }}
+    .pw-box {{
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 20px 22px; width: 320px; max-width: calc(100vw - 40px);
+    }}
+    .pw-box h4 {{ margin: 0 0 6px; font-size: 15px; }}
+    .pw-box p {{ margin: 0 0 14px; font-size: 12px; color: var(--muted); }}
+    .pw-box input {{
+      width: 100%; box-sizing: border-box; height: 36px; padding: 0 10px;
+      border-radius: 8px; border: 1px solid var(--border); background: var(--bg);
+      color: var(--text); font-size: 14px;
+    }}
+    .pw-btns {{ display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; }}
+
+    #clipCapture {{
+      position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+      z-index: 300; width: 320px; height: 36px; padding: 6px 10px;
+      border: 1px solid var(--border); border-radius: 8px;
+      background: var(--panel); color: var(--text); font-size: 13px;
+      opacity: 0; pointer-events: none; transition: opacity .15s;
+    }}
+    #clipCapture.open {{
+      opacity: 1; pointer-events: auto;
+    }}
+    #clipToast {{
+      position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%);
+      z-index: 310; max-width: 420px; padding: 7px 14px; border-radius: 8px;
+      background: rgba(15, 23, 42, .9); border: 1px solid var(--border);
+      color: var(--text); font-size: 12px; opacity: 0; pointer-events: none;
+      transition: opacity .2s;
+    }}
+    #clipToast.show {{
+      opacity: 1;
+    }}
   </style>
 </head>
 <body>
   <div class="wrap">
-    <div class="top">
-      <div class="title">
-        <strong>noVNC — {safe_name}</strong>
-        <span>{escape(server.ip)}:{int(server.port)}</span>
-      </div>
-      <div class="actions">
-        <div id="status">Подготовка…</div>
-        <button id="btnReconnect" class="primary">Подключиться</button>
-        <button id="btnDisconnect">Отключить</button>
+    <div id="screen"></div>
+    <div id="status" class="status-badge">Подключение…</div>
+  </div>
+
+  <div class="pw-overlay" id="pwOverlay">
+    <div class="pw-box">
+      <h4>Требуется пароль VNC</h4>
+      <p>Введите пароль для подключения к серверу. Пароль не сохраняется.</p>
+      <input type="password" id="pwInput" autocomplete="off" spellcheck="false" />
+      <div class="pw-btns">
+        <button id="pwCancel">Отмена</button>
+        <button class="primary" id="pwOk">Подключиться</button>
       </div>
     </div>
-    <div id="screen"></div>
   </div>
+
+  <textarea id="clipCapture" tabindex="-1" placeholder="Ctrl+V — вставить и отправить на удалённую машину"></textarea>
+  <div id="clipToast"></div>
 
   <script type="module">
     import RFB from 'https://cdn.jsdelivr.net/gh/novnc/noVNC@v{NOVNC_CDN_VERSION}/core/rfb.js';
@@ -1249,11 +1599,35 @@ def novnc_page(server_id):
     const novncWsPath = {json.dumps(ws_path)};
     const statusEl = document.getElementById('status');
     const screen = document.getElementById('screen');
-    const btnReconnect = document.getElementById('btnReconnect');
-    const btnDisconnect = document.getElementById('btnDisconnect');
 
     let rfb = null;
     let ro = null;
+    const pwOverlay = document.getElementById('pwOverlay');
+    const pwInput = document.getElementById('pwInput');
+
+    function openPwModal() {{
+      pwInput.value = '';
+      pwOverlay.classList.add('open');
+      setTimeout(() => pwInput.focus(), 50);
+    }}
+    function closePwModal() {{
+      pwOverlay.classList.remove('open');
+    }}
+
+    document.getElementById('pwOk').addEventListener('click', () => {{
+      const password = pwInput.value;
+      closePwModal();
+      if (rfb) {{
+        try {{ rfb.sendCredentials({{ password }}); }} catch (e) {{
+          setStatus('Не удалось отправить пароль', 'bad');
+        }}
+      }}
+    }});
+    document.getElementById('pwCancel').addEventListener('click', closePwModal);
+    pwInput.addEventListener('keydown', (e) => {{
+      if (e.key === 'Enter') document.getElementById('pwOk').click();
+      if (e.key === 'Escape') closePwModal();
+    }});
 
     function setStatus(text, kind) {{
       statusEl.textContent = text;
@@ -1302,12 +1676,14 @@ def novnc_page(server_id):
         }});
 
         rfb.addEventListener('credentialsrequired', () => {{
-          const password = prompt('Введите пароль VNC (если требуется):') || '';
-          try {{
-            rfb.sendCredentials({{ password }});
-          }} catch (e) {{
-            setStatus('Не удалось отправить пароль', 'bad');
-          }}
+          openPwModal();
+        }});
+
+        // Двусторонний буфер обмена: приём текста с удалённой машины
+        rfb.addEventListener('clipboard', (e) => {{
+          const text = e?.detail?.text;
+          if (!text) return;
+          writeToLocalClipboard(text);
         }});
 
         // Автомасштабирование при изменении размеров вкладки/контейнера
@@ -1326,23 +1702,88 @@ def novnc_page(server_id):
       }}
     }}
 
-    function disconnect() {{
-      if (rfb) {{
-        try {{ rfb.disconnect(); }} catch (_) {{}}
-        rfb = null;
-      }}
-      if (ro) {{
-        try {{ ro.disconnect(); }} catch (_) {{}}
-        ro = null;
-      }}
-      setStatus('Отключено');
-    }}
-
-    btnReconnect.addEventListener('click', connect);
-    btnDisconnect.addEventListener('click', disconnect);
     window.addEventListener('resize', () => {{
       if (rfb) rfb.scaleViewport = true;
     }});
+
+    // ---------- Буфер обмена ----------
+    const clipCapture = document.getElementById('clipCapture');
+    const clipToast = document.getElementById('clipToast');
+    let clipToastTimer = null;
+
+    function showClipToast(text) {{
+      clipToast.textContent = text;
+      clipToast.classList.add('show');
+      clearTimeout(clipToastTimer);
+      clipToastTimer = setTimeout(() => clipToast.classList.remove('show'), 2600);
+    }}
+
+    function writeToLocalClipboard(text) {{
+      if (navigator.clipboard && navigator.clipboard.writeText) {{
+        navigator.clipboard.writeText(text)
+          .then(() => showClipToast('Скопировано с удалённой машины'))
+          .catch(() => {{
+            try {{ legacyCopy(text); }} catch (_) {{}}
+          }});
+      }} else {{
+        try {{ legacyCopy(text); }} catch (_) {{}}
+      }}
+    }}
+
+    function legacyCopy(text) {{
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.cssText = 'position:fixed; top:0; left:0; width:2px; height:2px; opacity:0;';
+      document.body.appendChild(ta);
+      ta.focus();
+      ta.select();
+      const ok = document.execCommand('copy');
+      ta.remove();
+      if (ok) showClipToast('Скопировано с удалённой машины');
+      else showClipToast('Текст получен с удалённой машины');
+    }}
+
+    function sendToRemote(text) {{
+      if (!text || !rfb) return;
+      try {{ rfb.clipboardPasteFrom(text); }} catch (_) {{}}
+      showClipToast('Отправлено на удалённую машину');
+    }}
+
+    // Отправка локального буфера на удалённую машину по Ctrl+V.
+    // Перехват в фазе capture, чтобы срабатывать раньше обработчиков noVNC.
+    window.addEventListener('keydown', (e) => {{
+      const ae = document.activeElement;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key.toLowerCase() !== 'v') return;
+      if (navigator.clipboard && navigator.clipboard.readText) {{
+        // HTTPS: читаем буфер напрямую (вызов происходит в рамках жеста пользователя)
+        e.preventDefault();
+        navigator.clipboard.readText().then(sendToRemote).catch(() => {{
+          openClipCapture();
+        }});
+      }} else {{
+        // HTTP: перенаправляем вставку в скрытое поле и забираем текст оттуда
+        e.preventDefault();
+        openClipCapture();
+      }}
+    }}, true);
+
+    function openClipCapture() {{
+      clipCapture.value = '';
+      clipCapture.classList.add('open');
+      clipCapture.focus();
+      clipCapture._handled = false;
+      const onInput = () => {{
+        if (clipCapture._handled) return;
+        clipCapture._handled = true;
+        const text = clipCapture.value;
+        clipCapture.classList.remove('open');
+        sendToRemote(text);
+      }};
+      clipCapture.addEventListener('input', onInput);
+      clipCapture.addEventListener('paste', onInput);
+    }}
 
     // Автоподключение
     connect();

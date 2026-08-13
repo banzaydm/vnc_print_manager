@@ -15,6 +15,10 @@ instance/*.log
 # Runtime noVNC tokens (не храним в репозитории)
 instance/novnc_tokens.txt
 
+# Секретный ключ подписи сессий и бэкапы (runtime-данные)
+instance/secret_key
+instance/backups/
+
 # Virtual environment
 venv/
 env/

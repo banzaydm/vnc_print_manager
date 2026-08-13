@@ -18,6 +18,11 @@ services:
       - INIT_DB_ON_START=1
       - SEED_DEMO_DATA=0
       - START_WEBSOCKIFY=1  # run.py сам запускает websockify внутри контейнера
+      - AUTH_ENABLED=1      # Авторизация при открытии страницы (0 — отключить)
+      # - SECRET_KEY=change-me-to-a-long-random-string  # Подпись сессий (иначе генерируется и хранится в instance/secret_key)
+      # Первый администратор (создаётся автоматически при пустой базе):
+      # - ADMIN_USERNAME=admin
+      # - ADMIN_PASSWORD=your-strong-password
       # - API_KEY=your-secret-key
     restart: unless-stopped
     networks:

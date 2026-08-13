@@ -1117,6 +1117,10 @@
             </div>
             
             <div class="header-right">
+                <span id="currentUserLabel" class="user-label" style="display: none;"></span>
+                <button class="btn-icon" id="logoutBtn" title="Выйти" style="display: none;">
+                    <i class="fas fa-sign-out-alt"></i>
+                </button>
                 <button class="btn-icon" id="themeSwitch" title="Тема">
                     <i class="fas fa-moon"></i>
                 </button>
@@ -1382,6 +1386,37 @@
                                     <span>Восстановить</span>
                                 </button>
                             </div>
+                        </div>
+
+                        <div class="settings-section" id="usersSection" style="display: none;">
+                            <h3 style="margin-bottom: 20px; color: var(--text-primary);">Пользователи</h3>
+
+                            <div class="form-group" style="margin-bottom: 20px;">
+                                <label class="form-label">Добавить пользователя</label>
+                                <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end;">
+                                    <div style="flex: 1; min-width: 160px;">
+                                        <label class="form-label" style="margin-bottom: 6px; font-size: 12px;">Логин</label>
+                                        <input type="text" id="newUserUsername" class="form-input" placeholder="Логин (мин. 3 символа)">
+                                    </div>
+                                    <div style="flex: 1; min-width: 160px;">
+                                        <label class="form-label" style="margin-bottom: 6px; font-size: 12px;">Пароль</label>
+                                        <input type="password" id="newUserPassword" class="form-input" placeholder="Пароль (мин. 6 символов)" autocomplete="new-password">
+                                    </div>
+                                    <div>
+                                        <label class="form-label" style="margin-bottom: 6px; font-size: 12px;">Роль</label>
+                                        <select id="newUserRole" class="form-select" style="height: 38px;">
+                                            <option value="user">Пользователь</option>
+                                            <option value="admin">Администратор</option>
+                                        </select>
+                                    </div>
+                                    <button class="btn btn-primary" onclick="addUser()">
+                                        <i class="fas fa-user-plus"></i>
+                                        <span>Добавить</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div id="usersList"></div>
                         </div>
 
                         <div class="settings-section">
@@ -1945,7 +1980,13 @@
                     options = { ...options, headers };
                 }
             }
-            return _originalFetch(url, options);
+            const promise = _originalFetch(url, options);
+            promise.then((response) => {
+                if (response.status === 401 && !window.location.pathname.startsWith('/login')) {
+                    window.location.href = '/login';
+                }
+            }).catch(() => {});
+            return promise;
         };
         
         // Функция обновления информации о версии в интерфейсе
@@ -1975,6 +2016,12 @@
         document.addEventListener('DOMContentLoaded', async function() {
             // Обновляем отображение версии
             updateVersionDisplay();
+            
+            // Текущий пользователь (авторизация) и привязка кнопки выхода
+            loadCurrentUser();
+            document.getElementById('logoutBtn')?.addEventListener('click', () => {
+                window.location.href = '/logout';
+            });
             
             // Загружаем настройки
             loadAndApplySettings();
@@ -4726,6 +4773,181 @@
             } catch (error) {
                 console.error('Ошибка открытия настроек:', error);
                 showNotification('Ошибка открытия настроек', 'error');
+            }
+        }
+
+        // --- Пользователи (авторизация) ---
+
+        let currentUserRole = null;
+        let currentUserAuthEnabled = false;
+
+        async function loadCurrentUser() {
+            try {
+                const response = await fetch('/api/me');
+                const data = await response.json();
+                if (!response.ok || !data.authenticated) {
+                    window.location.href = '/login';
+                    return;
+                }
+                currentUserAuthEnabled = !!data.auth_enabled;
+                currentUserRole = data.role || 'user';
+
+                const label = document.getElementById('currentUserLabel');
+                const logoutBtn = document.getElementById('logoutBtn');
+                if (label) {
+                    if (data.username) {
+                        label.textContent = data.username;
+                        label.style.display = 'inline-flex';
+                    } else {
+                        label.style.display = 'none';
+                    }
+                }
+                if (logoutBtn) logoutBtn.style.display = 'inline-flex';
+
+                const usersSection = document.getElementById('usersSection');
+                if (usersSection) {
+                    usersSection.style.display = (currentUserAuthEnabled && currentUserRole === 'admin') ? 'block' : 'none';
+                }
+                if (currentUserRole === 'admin') {
+                    loadUsers();
+                }
+            } catch (error) {
+                console.error('Ошибка определения текущего пользователя:', error);
+            }
+        }
+
+        async function loadUsers() {
+            try {
+                const response = await fetch('/api/users');
+                if (!response.ok) {
+                    showNotification('Ошибка загрузки пользователей', 'error');
+                    return;
+                }
+                const users = await response.json();
+                renderUsers(users);
+            } catch (error) {
+                console.error('Ошибка загрузки пользователей:', error);
+            }
+        }
+
+        function renderUsers(users) {
+            const container = document.getElementById('usersList');
+            if (!container) return;
+
+            if (!users.length) {
+                container.innerHTML = '<div style="opacity: .6; padding: 12px;">Пользователи не найдены</div>';
+                return;
+            }
+
+            let html = '<div style="border: 1px solid var(--card-border); border-radius: 8px; overflow: hidden;">';
+            users.forEach(u => {
+                const roleLabel = u.role === 'admin' ? 'Администратор' : 'Пользователь';
+                html += `
+                    <div style="display: flex; align-items: center; gap: 12px; padding: 10px 14px; border-bottom: 1px solid var(--card-border);">
+                        <div style="flex: 1; min-width: 0;">
+                            <strong style="display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(u.username)}</strong>
+                            <small style="opacity: .6;">${roleLabel}</small>
+                        </div>
+                        <select onchange="changeUserRole(${u.id}, this.value)" style="height: 32px; border-radius: 6px; border: 1px solid var(--card-border); background: var(--card-bg); color: var(--text-color);">
+                            <option value="user" ${u.role === 'user' ? 'selected' : ''}>Пользователь</option>
+                            <option value="admin" ${u.role === 'admin' ? 'selected' : ''}>Администратор</option>
+                        </select>
+                        <button class="btn btn-sm" onclick="changeUserPassword(${u.id}, '${escapeHtml(u.username)}')">
+                            <i class="fas fa-key"></i>
+                        </button>
+                        <button class="btn btn-sm" onclick="deleteUser(${u.id}, '${escapeHtml(u.username)}')" style="background: var(--danger);">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </div>`;
+            });
+            html += '</div>';
+            container.innerHTML = html;
+        }
+
+        async function addUser() {
+            const username = (document.getElementById('newUserUsername').value || '').trim();
+            const password = document.getElementById('newUserPassword').value || '';
+            const role = document.getElementById('newUserRole').value;
+
+            if (username.length < 3) { showNotification('Логин должен быть не короче 3 символов', 'error'); return; }
+            if (password.length < 6) { showNotification('Пароль должен быть не короче 6 символов', 'error'); return; }
+
+            try {
+                const response = await fetch('/api/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password, role })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    document.getElementById('newUserUsername').value = '';
+                    document.getElementById('newUserPassword').value = '';
+                    showNotification(`Пользователь ${username} создан`, 'success');
+                    loadUsers();
+                } else {
+                    showNotification(data.error || 'Ошибка создания пользователя', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка создания пользователя', 'error');
+            }
+        }
+
+        async function changeUserRole(userId, role) {
+            try {
+                const response = await fetch(`/api/users/${userId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ role })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    showNotification('Роль обновлена', 'success');
+                    loadUsers();
+                } else {
+                    showNotification(data.error || 'Ошибка изменения роли', 'error');
+                    loadUsers();
+                }
+            } catch (error) {
+                showNotification('Ошибка изменения роли', 'error');
+            }
+        }
+
+        async function changeUserPassword(userId, username) {
+            const password = prompt(`Новый пароль для пользователя ${username}:`) || '';
+            if (!password) return;
+            if (password.length < 6) { showNotification('Пароль должен быть не короче 6 символов', 'error'); return; }
+            try {
+                const response = await fetch(`/api/users/${userId}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password })
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    showNotification('Пароль изменён', 'success');
+                } else {
+                    showNotification(data.error || 'Ошибка изменения пароля', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка изменения пароля', 'error');
+            }
+        }
+
+        async function deleteUser(userId, username) {
+            if (!confirm(`Удалить пользователя ${username}?`)) return;
+            try {
+                const response = await fetch(`/api/users/${userId}`, {
+                    method: 'DELETE'
+                });
+                const data = await response.json();
+                if (response.ok) {
+                    showNotification(`Пользователь ${username} удалён`, 'success');
+                    loadUsers();
+                } else {
+                    showNotification(data.error || 'Ошибка удаления пользователя', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка удаления пользователя', 'error');
             }
         }
 

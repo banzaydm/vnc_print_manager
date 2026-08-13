@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Вход — VNC Manager</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #0f172a;
+      color: #e5e7eb;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    }
+    .wrap {
+      min-height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      width: 360px;
+      max-width: 100%;
+      background: #111827;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 14px;
+      padding: 28px 26px;
+      box-shadow: 0 20px 50px rgba(0,0,0,.45);
+    }
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+    .logo .dot {
+      width: 34px;
+      height: 34px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #4a6cf7, #7c3aed);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      color: #fff;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .logo strong { font-size: 17px; }
+    .logo span { display: block; font-size: 12px; color: #9ca3af; margin-top: 2px; }
+    h1 { font-size: 20px; margin: 0 0 6px; }
+    .sub { font-size: 13px; color: #9ca3af; margin: 0 0 20px; line-height: 1.5; }
+    label { display: block; font-size: 12px; color: #9ca3af; margin: 14px 0 6px; }
+    input {
+      width: 100%;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: 9px;
+      border: 1px solid rgba(255,255,255,.16);
+      background: #0f172a;
+      color: #e5e7eb;
+      font-size: 14px;
+      outline: none;
+    }
+    input:focus { border-color: #4a6cf7; }
+    button {
+      width: 100%;
+      height: 42px;
+      margin-top: 22px;
+      border-radius: 9px;
+      border: none;
+      background: #2563eb;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover { background: #1d4ed8; }
+    .error {
+      background: rgba(239,68,68,.12);
+      border: 1px solid rgba(239,68,68,.4);
+      color: #fca5a5;
+      border-radius: 9px;
+      padding: 10px 12px;
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+    .hint {
+      margin-top: 16px;
+      font-size: 12px;
+      color: #6b7280;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <div class="logo">
+        <div class="dot">V</div>
+        <div>
+          <strong>VNC &amp; Printer Manager</strong>
+          <span>Управление подключениями</span>
+        </div>
+      </div>
+
+      {% if need_setup %}
+        <h1>Первичная настройка</h1>
+        <p class="sub">Пользователей ещё нет. Создайте первого администратора — он получит полный доступ, включая управление пользователями.</p>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        <form method="post" action="/login" autocomplete="off">
+          <input type="hidden" name="setup" value="1" />
+          <label for="username">Логин администратора</label>
+          <input type="text" id="username" name="username" required minlength="3" autofocus />
+          <label for="password">Пароль</label>
+          <input type="password" id="password" name="password" required minlength="6" />
+          <button type="submit">Создать и войти</button>
+        </form>
+      {% else %}
+        <h1>Вход</h1>
+        <p class="sub">Войдите, чтобы получить доступ к серверам и принтерам.</p>
+        {% if error %}<div class="error">{{ error }}</div>{% endif %}
+        <form method="post" action="/login">
+          <label for="username">Логин</label>
+          <input type="text" id="username" name="username" required autofocus />
+          <label for="password">Пароль</label>
+          <input type="password" id="password" name="password" required />
+          <button type="submit">Войти</button>
+        </form>
+      {% endif %}
+
+      <div class="hint">Пароли хранятся в зашифрованном виде и не передаются в открытом виде.</div>
+    </div>
+  </div>
+</body>
+</html>
