@@ -1253,9 +1253,9 @@ def camera_hls(camera_id):
             'ffmpeg', '-hide_banner', '-loglevel', 'error',
             '-rtsp_transport', 'tcp',
             '-i', rtsp_url,
-            '-an',
             '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
             '-g', '30', '-sc_threshold', '0',
+            '-c:a', 'aac', '-b:a', '96k', '-ac', '1',
             '-f', 'hls', '-hls_time', '2', '-hls_list_size', '6',
             '-hls_flags', 'delete_segments+omit_endlist',
             os.path.join(outdir, 'playlist.m3u8')
@@ -1342,6 +1342,7 @@ _CAMERA_VIEW_HTML = """<!doctype html>
     <span id="status">Подключение...</span>
     <span style="flex:1"></span>
     <button class="btn" onclick="togglePlay()">Пауза</button>
+    <button class="btn" id="btnSound" onclick="toggleSound()">Включить звук</button>
     <button class="btn" onclick="window.close()">Закрыть</button>
   </div>
   <div id="stage">
@@ -1354,6 +1355,7 @@ _CAMERA_VIEW_HTML = """<!doctype html>
   const video = document.getElementById('video');
   const statusEl = document.getElementById('status');
   const errEl = document.getElementById('err');
+  const btnSound = document.getElementById('btnSound');
   const playlist = '/api/camera/stream/{{ camera.id }}/playlist.m3u8';
   let hls = null;
 
@@ -1397,6 +1399,12 @@ _CAMERA_VIEW_HTML = """<!doctype html>
   function togglePlay() {
     if (video.paused) { video.play(); statusEl.textContent = 'Live'; }
     else { video.pause(); statusEl.textContent = 'Пауза'; }
+  }
+
+  function toggleSound() {
+    video.muted = !video.muted;
+    btnSound.textContent = video.muted ? 'Включить звук' : 'Выключить звук';
+    if (!video.muted) { video.volume = 1; }
   }
 
   window.addEventListener('beforeunload', () => {
