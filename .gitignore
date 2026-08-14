@@ -40,6 +40,9 @@ Thumbs.db
 # Docker
 .dockerignore
 
+# Runtime HLS segments
+instance/hls/
+
 # Temp files
 *.tmp
 *.temp

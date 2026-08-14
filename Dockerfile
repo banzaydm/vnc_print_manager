@@ -7,6 +7,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
+# FFmpeg для перекодировки RTSP в HLS (просмотр камер в браузере)
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+
 # Копируем все файлы приложения
 COPY . .
 

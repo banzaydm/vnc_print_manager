@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string
+from flask import Flask, request, jsonify, session, redirect, url_for, render_template_string, send_file, abort
 import subprocess
 import os
 import socket
@@ -8,8 +8,9 @@ import time
 import json
 import re
 import hmac
+import tempfile
 from datetime import datetime
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, quote
 import platform
 import ipaddress
 import concurrent.futures
@@ -265,7 +266,7 @@ def _auth_gate():
         return None
 
     is_api = path.startswith('/api/')
-    is_page = path in _HTML_PAGE_PATHS or path.startswith('/novnc/') or path.startswith('/rustdesk/')
+    is_page = path in _HTML_PAGE_PATHS or path.startswith('/novnc/') or path.startswith('/rustdesk/') or path.startswith('/camera_view/')
     if not is_api and not is_page:
         return None  # статика — публична
 
@@ -1176,6 +1177,246 @@ def router_api(router_id):
     db.session.commit()
     return jsonify({'success': True})
 
+# --- RTSP->HLS просмотр камер в браузере ---
+_HLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance', 'hls')
+_HLS_LOCK = threading.Lock()
+_HLS_PROCESSES = {}  # camera_id -> Popen
+
+
+def _hls_ffmpeg_available():
+    try:
+        r = subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=5)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def _rtsp_url_with_creds(camera):
+    """RTSP URL с подставленными логином/паролем камеры (если заданы и не в URL)."""
+    url = (camera.rtsp_url or '').strip()
+    if not url:
+        return url
+    # Если credentials уже встроены в URL (user@ или user:pass@) — не дублируем
+    if re.search(r'://[^/@\s]+@', url):
+        return url
+    user = (camera.username or '').strip()
+    pwd = camera.password or ''
+    if not user and not pwd:
+        return url
+    creds = quote(user, safe='')
+    if pwd:
+        creds += ':' + quote(pwd, safe='')
+    if '://' in url:
+        scheme, rest = url.split('://', 1)
+        url = f'{scheme}://{creds}@{rest}'
+    return url
+
+
+@app.route('/api/camera/stream/<int:camera_id>', methods=['POST', 'DELETE'])
+def camera_hls(camera_id):
+    """Запуск/остановка FFmpeg-процесса, перекодирующего RTSP камеры в HLS."""
+    camera = Camera.query.get(camera_id)
+    if not camera:
+        return jsonify({'error': 'Камера не найдена'}), 404
+
+    if request.method == 'DELETE':
+        with _HLS_LOCK:
+            p = _HLS_PROCESSES.pop(camera_id, None)
+        if p:
+            try:
+                p.terminate()
+            except Exception:
+                pass
+        return jsonify({'success': True})
+
+    if not camera.rtsp_url:
+        return jsonify({'error': 'RTSP поток не указан'}), 400
+    if not _hls_ffmpeg_available():
+        return jsonify({'error': 'FFmpeg недоступен на сервере'}), 500
+
+    rtsp_url = _rtsp_url_with_creds(camera)
+
+    with _HLS_LOCK:
+        existing = _HLS_PROCESSES.get(camera_id)
+        if existing and existing.poll() is None:
+            return jsonify({'playlist': f'/api/camera/stream/{camera_id}/playlist.m3u8'})
+
+        outdir = os.path.join(_HLS_DIR, str(camera_id))
+        os.makedirs(outdir, exist_ok=True)
+        for f in os.listdir(outdir):
+            try:
+                os.remove(os.path.join(outdir, f))
+            except OSError:
+                pass
+
+        cmd = [
+            'ffmpeg', '-hide_banner', '-loglevel', 'error',
+            '-rtsp_transport', 'tcp',
+            '-i', rtsp_url,
+            '-an',
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+            '-g', '30', '-sc_threshold', '0',
+            '-f', 'hls', '-hls_time', '2', '-hls_list_size', '6',
+            '-hls_flags', 'delete_segments+omit_endlist',
+            os.path.join(outdir, 'playlist.m3u8')
+        ]
+        try:
+            log_file = open(os.path.join(outdir, 'ffmpeg.log'), 'ab')
+            p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=log_file)
+        except OSError as e:
+            return jsonify({'error': f'Ошибка запуска FFmpeg: {e}'}), 500
+
+        # Даём FFmpeg пару секунд на подключение к камере; если он сразу упал
+        # (неверный логин/пароль, недоступный RTSP) — возвращаем понятную ошибку.
+        time.sleep(2)
+        if p.poll() is not None:
+            try:
+                log_file.close()
+            except Exception:
+                pass
+            _HLS_PROCESSES.pop(camera_id, None)
+            return jsonify({'error': 'Не удалось подключиться к камере (проверьте логин/пароль и RTSP-адрес)'}), 502
+
+        # Ждём появления playlist.m3u8: ffmpeg создаёт его не сразу, а после
+        # подключения к камере и набора первых сегментов. Возвращаем 200 только
+        # когда плейлист реально существует, иначе hls.js получит 404 и упадёт.
+        playlist_path = os.path.join(outdir, 'playlist.m3u8')
+        waited = 0
+        while not os.path.exists(playlist_path) and waited < 10:
+            if p.poll() is not None:
+                break
+            time.sleep(0.25)
+            waited += 0.25
+        if not os.path.exists(playlist_path):
+            try:
+                p.terminate()
+            except Exception:
+                pass
+            try:
+                log_file.close()
+            except Exception:
+                pass
+            _HLS_PROCESSES.pop(camera_id, None)
+            return jsonify({'error': 'Не удалось запустить трансляцию (проверьте RTSP-адрес и доступность камеры)'}), 502
+
+        _HLS_PROCESSES[camera_id] = p
+
+    return jsonify({'playlist': f'/api/camera/stream/{camera_id}/playlist.m3u8'})
+
+
+@app.route('/api/camera/stream/<int:camera_id>/<path:filename>', methods=['GET'])
+def camera_hls_file(camera_id, filename):
+    safe = os.path.basename(filename)
+    if not safe or not (safe.endswith('.m3u8') or safe.endswith('.ts')):
+        return jsonify({'error': 'Not Found'}), 404
+    path = os.path.join(_HLS_DIR, str(camera_id), safe)
+    if not os.path.exists(path):
+        return jsonify({'error': 'Not Found'}), 404
+    if safe.endswith('.m3u8'):
+        return send_file(path, mimetype='application/vnd.apple.mpegurl')
+    return send_file(path, mimetype='video/mp2t')
+
+
+_CAMERA_VIEW_HTML = """<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>{{ camera.name }} — просмотр</title>
+<style>
+  body{margin:0;background:#000;color:#fff;font-family:system-ui,sans-serif}
+  .wrap{position:fixed;inset:0;display:flex;flex-direction:column}
+  #bar{display:flex;align-items:center;gap:12px;padding:8px 14px;background:#111;font-size:13px}
+  #status{color:#aaa;font-size:12px}
+  .btn{background:#333;border:1px solid #555;color:#fff;padding:6px 14px;border-radius:6px;cursor:pointer}
+  .btn:hover{background:#444}
+  #stage{flex:1;position:relative}
+  video{width:100%;height:100%;background:#000}
+  #err{display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:#f66;text-align:center;padding:20px;box-sizing:border-box}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="bar">
+    <strong>{{ camera.name }}</strong>
+    <span style="opacity:.6">{{ camera.ip }}</span>
+    <span id="status">Подключение...</span>
+    <span style="flex:1"></span>
+    <button class="btn" onclick="togglePlay()">Пауза</button>
+    <button class="btn" onclick="window.close()">Закрыть</button>
+  </div>
+  <div id="stage">
+    <video id="video" controls autoplay muted></video>
+    <div id="err"></div>
+  </div>
+</div>
+<script src="/hls.min.js"></script>
+<script>
+  const video = document.getElementById('video');
+  const statusEl = document.getElementById('status');
+  const errEl = document.getElementById('err');
+  const playlist = '/api/camera/stream/{{ camera.id }}/playlist.m3u8';
+  let hls = null;
+
+  function showError(msg) {
+    errEl.textContent = msg;
+    errEl.style.display = 'flex';
+    statusEl.textContent = 'Ошибка';
+  }
+
+  async function start() {
+    try {
+      const r = await fetch('/api/camera/stream/{{ camera.id }}', { method: 'POST' });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        throw new Error(d.error || 'Не удалось запустить поток');
+      }
+    } catch (e) {
+      showError(e.message);
+      return;
+    }
+
+    if (window.Hls && Hls.isSupported()) {
+      hls = new Hls({ liveDurationInfinity: true });
+      hls.on(Hls.Events.MANIFEST_PARSED, () => { statusEl.textContent = 'Live'; });
+      hls.on(Hls.Events.ERROR, (evt, data) => {
+        if (data.fatal) {
+          hls.destroy();
+          showError('Поток не воспроизводится (недоступен или требует авторизации камеры)');
+        }
+      });
+      hls.loadSource(playlist);
+      hls.attachMedia(video);
+    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      video.src = playlist;
+      statusEl.textContent = 'Live';
+    } else {
+      showError('Браузер не поддерживает HLS');
+    }
+  }
+
+  function togglePlay() {
+    if (video.paused) { video.play(); statusEl.textContent = 'Live'; }
+    else { video.pause(); statusEl.textContent = 'Пауза'; }
+  }
+
+  window.addEventListener('beforeunload', () => {
+    fetch('/api/camera/stream/{{ camera.id }}', { method: 'DELETE', keepalive: true });
+  });
+
+  start();
+</script>
+</body>
+</html>"""
+
+
+@app.route('/camera_view/<int:camera_id>')
+def camera_view_page(camera_id):
+    camera = Camera.query.get(camera_id)
+    if not camera:
+        abort(404)
+    return render_template_string(_CAMERA_VIEW_HTML, camera=camera)
+
+
 @app.route('/api/connect/<int:server_id>', methods=['POST'])
 def connect_vnc(server_id):
     """Подключение к VNC серверу"""
@@ -1444,7 +1685,8 @@ def scan_network():
                     'ip': ip,
                     'port': 5900,
                     'name': f'VNC-{hostname}',
-                    'status': 'online'
+                    'status': 'online',
+                    'protocols': ['VNC']
                 })
                 app.logger.info(f'Найден VNC сервер: {ip}:5900')
             
@@ -1466,7 +1708,10 @@ def scan_network():
                             'port': port,
                             'name': display_name,
                             'status': 'online',
-                            'web_interface': f'http{"s" if port == 443 else ""}://{ip}:{port}'
+                            'web_interface': f'http{"s" if port == 443 else ""}://{ip}:{port}',
+                            'protocols': [{
+                                80: 'HTTP', 443: 'HTTPS', 9100: 'RAW', 631: 'IPP', 515: 'LPR'
+                            }.get(port, 'TCP')]
                         }
                         
                         # Добавляем подробную информацию, если доступна
@@ -1538,7 +1783,45 @@ def scan_network():
             app.logger.debug(f'Ошибка проверки порта {ip}:{port}: {e}')
             open_cache[key] = False
             return False
-    
+
+    def _cached_open_ports(ip):
+        """Открытые порты IP из уже выполненного сканирования (без новых запросов)."""
+        return {p for (i, p), v in open_cache.items() if i == ip and v}
+
+    def _camera_protocols(ip):
+        ports = _cached_open_ports(ip)
+        protos = []
+        if 554 in ports:
+            protos.append('RTSP')
+        if 80 in ports or 8080 in ports:
+            protos.append('HTTP')
+        if 443 in ports:
+            protos.append('HTTPS')
+        if 8000 in ports:
+            protos.append('Hikvision SDK')
+        if 37777 in ports:
+            protos.append('Dahua SDK')
+        return protos
+
+    def _router_protocols(ip):
+        ports = _cached_open_ports(ip)
+        protos = []
+        if 80 in ports or 8080 in ports:
+            protos.append('HTTP')
+        if 443 in ports or 8443 in ports:
+            protos.append('HTTPS')
+        if 22 in ports:
+            protos.append('SSH')
+        if 23 in ports:
+            protos.append('Telnet')
+        if 161 in ports:
+            protos.append('SNMP')
+        if 1900 in ports:
+            protos.append('UPnP')
+        if 7547 in ports:
+            protos.append('TR-069')
+        return protos
+
     def is_likely_printer(ip, port):
         """Улучшенная проверка на принтер"""
         if port in (9100, 631, 515):
@@ -1683,7 +1966,8 @@ def scan_network():
                 'port': port,
                 'name': name,
                 'status': 'online',
-                'web_interface': f'http{"s" if port == 443 else ""}://{ip}:{port}'
+                'web_interface': f'http{"s" if port == 443 else ""}://{ip}:{port}',
+                'protocols': _camera_protocols(ip)
             }
         return None
 
@@ -1706,7 +1990,8 @@ def scan_network():
                 'name': name,
                 'status': 'online',
                 'rtsp_url': f'rtsp://{ip}:554/',
-                'web_interface': ''
+                'web_interface': '',
+                'protocols': _camera_protocols(ip)
             }
             return result
 
@@ -1720,14 +2005,14 @@ def scan_network():
         if check_port(ip, 8000):  # Hikvision SDK / IPC
             b = banner_grab(ip, 8000)
             if 'hikvision' in b.lower() or 'ipc' in b.lower():
-                return {'type': 'camera', 'ip': ip, 'port': 8000, 'name': 'Hikvision IPC', 'status': 'online', 'rtsp_url': f'rtsp://{ip}:554/', 'web_interface': ''}
+                return {'type': 'camera', 'ip': ip, 'port': 8000, 'name': 'Hikvision IPC', 'status': 'online', 'rtsp_url': f'rtsp://{ip}:554/', 'web_interface': '', 'protocols': _camera_protocols(ip)}
             if b:
-                return {'type': 'camera', 'ip': ip, 'port': 8000, 'name': hostname, 'status': 'online', 'web_interface': ''}
+                return {'type': 'camera', 'ip': ip, 'port': 8000, 'name': hostname, 'status': 'online', 'web_interface': '', 'protocols': _camera_protocols(ip)}
 
         if check_port(ip, 37777):  # Dahua SDK
             b = banner_grab(ip, 37777)
             if b:
-                return {'type': 'camera', 'ip': ip, 'port': 37777, 'name': hostname, 'status': 'online', 'web_interface': ''}
+                return {'type': 'camera', 'ip': ip, 'port': 37777, 'name': hostname, 'status': 'online', 'web_interface': '', 'protocols': _camera_protocols(ip)}
 
         return result
 
@@ -1749,7 +2034,8 @@ def scan_network():
                 'port': port,
                 'name': name,
                 'status': 'online',
-                'web_interface': f'http{"s" if port == 443 else ""}://{ip}:{port}'
+                'web_interface': f'http{"s" if port == 443 else ""}://{ip}:{port}',
+                'protocols': _router_protocols(ip)
             }
         return None
 
@@ -1768,15 +2054,15 @@ def scan_network():
                 name = hostname
                 if 'openwrt' in banner.lower() or 'dropbear' in banner.lower() or 'routeros' in banner.lower():
                     name = banner.split('\r\n')[0].strip()
-                return {'type': 'router', 'ip': ip, 'port': 22, 'name': name, 'status': 'online', 'web_interface': ''}
+                return {'type': 'router', 'ip': ip, 'port': 22, 'name': name, 'status': 'online', 'web_interface': '', 'protocols': _router_protocols(ip)}
 
         if check_port(ip, 23):
             banner = banner_grab(ip, 23)
             if banner and any(k in banner.lower() for k in ('cisco', 'routeros', 'telnet', 'dlink', 'huawei', 'zyxel')):
-                return {'type': 'router', 'ip': ip, 'port': 23, 'name': banner.split('\r\n')[0].strip() or hostname, 'status': 'online', 'web_interface': ''}
+                return {'type': 'router', 'ip': ip, 'port': 23, 'name': banner.split('\r\n')[0].strip() or hostname, 'status': 'online', 'web_interface': '', 'protocols': _router_protocols(ip)}
 
         if check_port(ip, 7547):  # TR-069
-            return {'type': 'router', 'ip': ip, 'port': 7547, 'name': hostname, 'status': 'online', 'web_interface': ''}
+            return {'type': 'router', 'ip': ip, 'port': 7547, 'name': hostname, 'status': 'online', 'web_interface': '', 'protocols': _router_protocols(ip)}
 
         try:
             import subprocess
@@ -1787,7 +2073,7 @@ def scan_network():
             if r.returncode == 0 and ('STRING' in r.stdout or 'OID' in r.stdout):
                 desc = r.stdout.strip()
                 if any(k in desc.lower() for k in ('cisco', 'mikrotik', 'routeros', 'huawei', 'zyxel', 'router', 'd-link', 'tp-link', 'dlink', 'switch')):
-                    return {'type': 'router', 'ip': ip, 'port': 161, 'name': desc[:60], 'status': 'online', 'web_interface': ''}
+                    return {'type': 'router', 'ip': ip, 'port': 161, 'name': desc[:60], 'status': 'online', 'web_interface': '', 'protocols': _router_protocols(ip)}
         except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
             pass
 
@@ -1802,7 +2088,7 @@ def scan_network():
             s.close()
             resp = data.decode('utf-8', errors='ignore').lower()
             if 'internetgatewaydevice' in resp or 'location:' in resp:
-                return {'type': 'router', 'ip': ip, 'port': 1900, 'name': hostname, 'status': 'online', 'web_interface': ''}
+                return {'type': 'router', 'ip': ip, 'port': 1900, 'name': hostname, 'status': 'online', 'web_interface': '', 'protocols': _router_protocols(ip)}
         except Exception:
             pass
 
