@@ -3074,6 +3074,7 @@ def export_data():
                 'web_interface': camera.web_interface,
                 'rtsp_url': camera.rtsp_url,
                 'username': camera.username,
+                'password': camera.password or '',
                 'is_favorite': bool(getattr(camera, 'is_favorite', False)),
                 'status': 'online' if camera_statuses.get(camera.id) else 'offline',
                 'comment': camera.comment,
@@ -3090,27 +3091,40 @@ def export_data():
                 'group_id': router.group_id,
                 'web_interface': router.web_interface,
                 'username': router.username,
+                'password': router.password or '',
                 'is_favorite': bool(getattr(router, 'is_favorite', False)),
                 'status': 'online' if router_statuses.get(router.id) else 'offline',
                 'comment': router.comment,
                 'created_at': router.created_at.isoformat() if router.created_at else None
             })
 
+        subnet_names_data = []
+        for sn in SubnetName.query.all():
+            subnet_names_data.append({'subnet': sn.subnet, 'name': sn.name})
+
+        settings_data = {}
+        for s in Settings.query.all():
+            settings_data[s.key] = s.value
+
         export_data = {
             'metadata': {
                 'exported_at': datetime.now().isoformat(),
-                'version': '2.0',
+                'version': '2.1',
                 'total_servers': len(servers_data),
                 'total_printers': len(printers_data),
                 'total_cameras': len(cameras_data),
                 'total_routers': len(routers_data),
-                'total_groups': len(groups_data)
+                'total_groups': len(groups_data),
+                'total_subnets': len(subnet_names_data),
+                'total_settings': len(settings_data)
             },
             'groups': groups_data,
             'servers': servers_data,
             'printers': printers_data,
             'cameras': cameras_data,
-            'routers': routers_data
+            'routers': routers_data,
+            'subnet_names': subnet_names_data,
+            'settings': settings_data
         }
         
         return jsonify(export_data)
@@ -3146,6 +3160,7 @@ def _backup_to_import_payload(backup_data):
                 'group_id': device.get('group_id'),
                 'is_favorite': device.get('is_favorite', False),
                 'comment': device.get('comment', ''),
+                'rustdesk_id': device.get('rustdesk_id', ''),
             })
         elif device.get('type') == 'printer':
             printers.append({
@@ -3164,6 +3179,8 @@ def _backup_to_import_payload(backup_data):
                 'group_id': device.get('group_id'),
                 'web_interface': device.get('web_interface', f"http://{device.get('ip', '')}"),
                 'rtsp_url': device.get('rtsp_url', ''),
+                'username': device.get('username', ''),
+                'password': device.get('password', ''),
                 'is_favorite': device.get('is_favorite', False),
                 'comment': device.get('comment', ''),
             })
@@ -3174,6 +3191,8 @@ def _backup_to_import_payload(backup_data):
                 'port': device.get('port', 80),
                 'group_id': device.get('group_id'),
                 'web_interface': device.get('web_interface', f"http://{device.get('ip', '')}"),
+                'username': device.get('username', ''),
+                'password': device.get('password', ''),
                 'is_favorite': device.get('is_favorite', False),
                 'comment': device.get('comment', ''),
             })
@@ -3207,6 +3226,8 @@ def import_data_core(data):
         Camera.query.delete(synchronize_session=False)
         Router.query.delete(synchronize_session=False)
         Group.query.delete(synchronize_session=False)
+        SubnetName.query.delete(synchronize_session=False)
+        Settings.query.delete(synchronize_session=False)
         db.session.commit()
 
     groups_data = data.get('groups', [])
@@ -3250,6 +3271,8 @@ def import_data_core(data):
             existing.group_id = group_id
             existing.is_favorite = server_data.get('is_favorite', False)
             existing.comment = server_data.get('comment', '')
+            if 'rustdesk_id' in server_data:
+                existing.rustdesk_id = (server_data.get('rustdesk_id') or '').strip()
         else:
             db.session.add(Server(
                 name=server_data['name'],
@@ -3258,6 +3281,7 @@ def import_data_core(data):
                 group_id=group_id,
                 is_favorite=server_data.get('is_favorite', False),
                 comment=server_data.get('comment', ''),
+                rustdesk_id=(server_data.get('rustdesk_id') or '').strip(),
             ))
 
     printers_data = data.get('printers', [])
@@ -3296,8 +3320,9 @@ def import_data_core(data):
             existing.group_id = group_id
             existing.web_interface = camera_data.get('web_interface', f"http://{camera_data['ip']}")
             existing.rtsp_url = camera_data.get('rtsp_url', '')
-            if camera_data.get('username'):
-                existing.username = camera_data['username']
+            if 'username' in camera_data:
+                existing.username = camera_data.get('username') or ''
+            _apply_password(existing, camera_data)
             existing.is_favorite = camera_data.get('is_favorite', False)
             existing.comment = camera_data.get('comment', '')
         else:
@@ -3309,6 +3334,7 @@ def import_data_core(data):
                 web_interface=camera_data.get('web_interface', f"http://{camera_data['ip']}"),
                 rtsp_url=camera_data.get('rtsp_url', ''),
                 username=camera_data.get('username', ''),
+                password=camera_data.get('password', ''),
                 is_favorite=camera_data.get('is_favorite', False),
                 comment=camera_data.get('comment', ''),
             ))
@@ -3325,8 +3351,9 @@ def import_data_core(data):
             existing.port = router_data.get('port', 80)
             existing.group_id = group_id
             existing.web_interface = router_data.get('web_interface', f"http://{router_data['ip']}")
-            if router_data.get('username'):
-                existing.username = router_data['username']
+            if 'username' in router_data:
+                existing.username = router_data.get('username') or ''
+            _apply_password(existing, router_data)
             existing.is_favorite = router_data.get('is_favorite', False)
             existing.comment = router_data.get('comment', '')
         else:
@@ -3337,6 +3364,7 @@ def import_data_core(data):
                 group_id=group_id,
                 web_interface=router_data.get('web_interface', f"http://{router_data['ip']}"),
                 username=router_data.get('username', ''),
+                password=router_data.get('password', ''),
                 is_favorite=router_data.get('is_favorite', False),
                 comment=router_data.get('comment', ''),
             ))
@@ -3634,16 +3662,56 @@ def delete_subnet_name(subnet):
 @app.route('/api/create_backup', methods=['POST'])
 def create_backup():
     try:
-        data = request.get_json()
-        if data is None:
-            return jsonify({'error': 'Нет данных для бэкапа'}), 400
+        data = request.get_json() or {}
+
+        groups = [{
+            'id': g.id, 'name': g.name, 'color': g.color, 'parent_id': g.parent_id,
+        } for g in Group.query.all()]
+        servers = [{
+            'id': s.id, 'name': s.name, 'ip': s.ip, 'port': s.port,
+            'group_id': s.group_id, 'is_favorite': s.is_favorite,
+            'comment': s.comment, 'rustdesk_id': s.rustdesk_id or '',
+        } for s in Server.query.all()]
+        printers = [{
+            'id': p.id, 'name': p.name, 'ip': p.ip, 'group_id': p.group_id,
+            'web_interface': p.web_interface, 'is_favorite': p.is_favorite,
+            'comment': p.comment,
+        } for p in Printer.query.all()]
+        cameras = [{
+            'id': c.id, 'name': c.name, 'ip': c.ip, 'port': c.port,
+            'group_id': c.group_id, 'web_interface': c.web_interface,
+            'rtsp_url': c.rtsp_url, 'username': c.username, 'password': c.password or '',
+            'is_favorite': c.is_favorite, 'comment': c.comment,
+        } for c in Camera.query.all()]
+        routers = [{
+            'id': r.id, 'name': r.name, 'ip': r.ip, 'port': r.port,
+            'group_id': r.group_id, 'web_interface': r.web_interface,
+            'username': r.username, 'password': r.password or '',
+            'is_favorite': r.is_favorite, 'comment': r.comment,
+        } for r in Router.query.all()]
+        subnet_names = [{'subnet': sn.subnet, 'name': sn.name} for sn in SubnetName.query.all()]
+        settings = {s.key: s.value for s in Settings.query.all()}
+
+        backup_data = {
+            'timestamp': datetime.now().isoformat(),
+            'comment': data.get('comment', ''),
+            'appTitle': data.get('appTitle') or _get_setting('app_title', 'VNC Manager'),
+            'theme': data.get('theme', ''),
+            'groups': groups,
+            'servers': servers,
+            'printers': printers,
+            'cameras': cameras,
+            'routers': routers,
+            'subnetNames': subnet_names,
+            'settings': settings,
+        }
 
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f"backup_{timestamp}.json"
         backup_path = os.path.join(BACKUPS_DIR, filename)
 
         with open(backup_path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            json.dump(backup_data, f, ensure_ascii=False, indent=2)
 
         return jsonify({
             'success': True,

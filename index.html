@@ -1951,8 +1951,24 @@
                                 Принтеры
                             </label>
                             <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="exportCameras" checked>
+                                Камеры
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="exportRouters" checked>
+                                Роутеры
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px;">
                                 <input type="checkbox" id="exportGroups" checked>
                                 Группы
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="exportSubnets" checked>
+                                Имена подсетей
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="exportSettings" checked>
+                                Настройки (RustDesk и др.)
                             </label>
                         </div>
                     </div>
@@ -3452,18 +3468,13 @@
         function confirmCreateBackup() {
             const comment = document.getElementById('backupComment').value.trim();
             
-            // Создаем бэкап всех данных
+            // Сервер сам соберёт все данные (группы, серверы, принтеры, камеры,
+            // роутеры, подсети, настройки RustDesk и т.д.) с реальными паролями.
             const backupData = {
                 timestamp: new Date().toISOString(),
                 comment: comment,
                 appTitle: document.title,
-                theme: document.body.getAttribute('data-theme'),
-                devices: devices,
-                groups: groups,
-                subnetNames: Array.from(subnetNames.entries()),
-                settings: {
-                    // Здесь можно добавить другие настройки
-                }
+                theme: document.body.getAttribute('data-theme')
             };
             
             closeCreateBackupModal();
@@ -5908,10 +5919,14 @@
             try {
                 const exportServers = document.getElementById('exportServers').checked;
                 const exportPrinters = document.getElementById('exportPrinters').checked;
+                const exportCameras = document.getElementById('exportCameras').checked;
+                const exportRouters = document.getElementById('exportRouters').checked;
                 const exportGroups = document.getElementById('exportGroups').checked;
+                const exportSubnets = document.getElementById('exportSubnets').checked;
+                const exportSettings = document.getElementById('exportSettings').checked;
                 const format = document.querySelector('input[name="exportFormat"]:checked').value;
                 
-                if (!exportServers && !exportPrinters && !exportGroups) {
+                if (!exportServers && !exportPrinters && !exportCameras && !exportRouters && !exportGroups && !exportSubnets && !exportSettings) {
                     showNotification('Выберите данные для экспорта', 'error');
                     return;
                 }
@@ -5926,16 +5941,18 @@
                 const exportData = {
                     metadata: {
                         ...allData.metadata,
-                        exportOptions: { exportServers, exportPrinters, exportGroups },
+                        exportOptions: { exportServers, exportPrinters, exportCameras, exportRouters, exportGroups, exportSubnets, exportSettings },
                         exportedAt: new Date().toISOString()
                     }
                 };
                 
                 if (exportServers) exportData.servers = allData.servers;
                 if (exportPrinters) exportData.printers = allData.printers;
+                if (exportCameras) exportData.cameras = allData.cameras || [];
+                if (exportRouters) exportData.routers = allData.routers || [];
                 if (exportGroups) exportData.groups = allData.groups;
-                exportData.cameras = allData.cameras || [];
-                exportData.routers = allData.routers || [];
+                if (exportSubnets) exportData.subnet_names = allData.subnet_names || [];
+                if (exportSettings) exportData.settings = allData.settings || {};
                 
                 let data, filename, mimeType;
                 
@@ -5948,7 +5965,7 @@
                     
                     if (exportServers && exportData.servers) {
                         csvLines.push('=== SERVERS ===');
-                        csvLines.push('Name,IP,Port,Group,Status,Is Favorite,Comment');
+                        csvLines.push('Name,IP,Port,Group,Status,Is Favorite,RustDesk ID,Comment');
                         exportData.servers.forEach(server => {
                             csvLines.push([
                                 `"${server.name}"`,
@@ -5957,6 +5974,7 @@
                                 server.group_name || '',
                                 server.status,
                                 server.is_favorite ? 'Yes' : 'No',
+                                server.rustdesk_id || '',
                                 `"${server.comment || ''}"`
                             ].join(','));
                         });
@@ -5979,7 +5997,7 @@
                         csvLines.push('');
                     }
 
-                    if (exportData.cameras && exportData.cameras.length) {
+                    if (exportCameras && exportData.cameras && exportData.cameras.length) {
                         csvLines.push('=== CAMERAS ===');
                         csvLines.push('Name,IP,Port,Group,Web Interface,RTSP,Username,Status,Comment');
                         exportData.cameras.forEach(cam => {
@@ -5998,7 +6016,7 @@
                         csvLines.push('');
                     }
 
-                    if (exportData.routers && exportData.routers.length) {
+                    if (exportRouters && exportData.routers && exportData.routers.length) {
                         csvLines.push('=== ROUTERS ===');
                         csvLines.push('Name,IP,Port,Group,Web Interface,Username,Status,Comment');
                         exportData.routers.forEach(r => {
@@ -6025,6 +6043,24 @@
                                 group.color,
                                 group.parent_id || ''
                             ].join(','));
+                        });
+                        csvLines.push('');
+                    }
+
+                    if (exportSubnets && exportData.subnet_names && exportData.subnet_names.length) {
+                        csvLines.push('=== SUBNETS ===');
+                        csvLines.push('Subnet,Name');
+                        exportData.subnet_names.forEach(sn => {
+                            csvLines.push([sn.subnet || '', `"${sn.name || ''}"`].join(','));
+                        });
+                        csvLines.push('');
+                    }
+
+                    if (exportSettings && exportData.settings && Object.keys(exportData.settings).length) {
+                        csvLines.push('=== SETTINGS ===');
+                        csvLines.push('Key,Value');
+                        Object.entries(exportData.settings).forEach(([k, v]) => {
+                            csvLines.push([k, `"${v || ''}"`].join(','));
                         });
                     }
                     
@@ -6110,7 +6146,7 @@
         
         function parseCSV(text) {
             const lines = text.split('\n');
-            const result = { servers: [], printers: [], groups: [] };
+            const result = { servers: [], printers: [], cameras: [], routers: [], groups: [], subnet_names: [], settings: {} };
             let currentSection = null;
             
             lines.forEach(line => {
@@ -6120,11 +6156,15 @@
                 if (line.startsWith('===')) {
                     if (line.includes('SERVERS')) currentSection = 'servers';
                     else if (line.includes('PRINTERS')) currentSection = 'printers';
+                    else if (line.includes('CAMERAS')) currentSection = 'cameras';
+                    else if (line.includes('ROUTERS')) currentSection = 'routers';
                     else if (line.includes('GROUPS')) currentSection = 'groups';
+                    else if (line.includes('SUBNETS')) currentSection = 'subnet_names';
+                    else if (line.includes('SETTINGS')) currentSection = 'settings';
                     return;
                 }
                 
-                if (line.startsWith('Name,') || line.startsWith('"Name",')) return;
+                if (line.startsWith('Name,') || line.startsWith('"Name",') || line.startsWith('Subnet,') || line.startsWith('Key,')) return;
                 
                 if (currentSection) {
                     const values = parseCSVLine(line);
@@ -6137,7 +6177,8 @@
                             group_name: values[3],
                             status: values[4],
                             is_favorite: values[5] === 'Yes',
-                            comment: values[6]
+                            rustdesk_id: values[6],
+                            comment: values[7] || ''
                         });
                     } else if (currentSection === 'printers' && values.length >= 6) {
                         result.printers.push({
@@ -6148,12 +6189,42 @@
                             status: values[4],
                             comment: values[5]
                         });
+                    } else if (currentSection === 'cameras' && values.length >= 9) {
+                        result.cameras.push({
+                            name: values[0],
+                            ip: values[1],
+                            port: parseInt(values[2]) || 80,
+                            group_name: values[3],
+                            web_interface: values[4],
+                            rtsp_url: values[5],
+                            username: values[6],
+                            status: values[7],
+                            comment: values[8]
+                        });
+                    } else if (currentSection === 'routers' && values.length >= 8) {
+                        result.routers.push({
+                            name: values[0],
+                            ip: values[1],
+                            port: parseInt(values[2]) || 80,
+                            group_name: values[3],
+                            web_interface: values[4],
+                            username: values[5],
+                            status: values[6],
+                            comment: values[7]
+                        });
                     } else if (currentSection === 'groups' && values.length >= 3) {
                         result.groups.push({
                             name: values[0],
                             color: values[1],
                             parent_id: values[2] || null
                         });
+                    } else if (currentSection === 'subnet_names' && values.length >= 2) {
+                        result.subnet_names.push({
+                            subnet: values[0],
+                            name: values[1]
+                        });
+                    } else if (currentSection === 'settings' && values.length >= 2) {
+                        result.settings[values[0]] = values[1];
                     }
                 }
             });
