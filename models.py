@@ -31,6 +31,7 @@ class Server(db.Model):
     is_favorite = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, nullable=True)
     comment = db.Column(db.Text, default='')
+    rustdesk_id = db.Column(db.String(100), default='')
     created_at = db.Column(db.DateTime, default=utcnow)
 
     def __repr__(self):

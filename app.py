@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 import platform
 import ipaddress
 import concurrent.futures
+import requests
 from markupsafe import escape
 from werkzeug.security import generate_password_hash, check_password_hash
 from models import db, Group, Server, Printer, Settings, SubnetName, User, utcnow
@@ -262,7 +263,7 @@ def _auth_gate():
         return None
 
     is_api = path.startswith('/api/')
-    is_page = path in _HTML_PAGE_PATHS or path.startswith('/novnc/')
+    is_page = path in _HTML_PAGE_PATHS or path.startswith('/novnc/') or path.startswith('/rustdesk/')
     if not is_api and not is_page:
         return None  # статика — публична
 
@@ -351,6 +352,7 @@ def init_db():
         # Миграции: добавляем колонки is_favorite в существующие таблицы
         _ensure_column('printer', 'is_favorite', "ALTER TABLE printer ADD COLUMN is_favorite BOOLEAN DEFAULT 0")
         _ensure_column('server', 'is_favorite', "ALTER TABLE server ADD COLUMN is_favorite BOOLEAN DEFAULT 0")
+        _ensure_column('server', 'rustdesk_id', "ALTER TABLE server ADD COLUMN rustdesk_id VARCHAR(100) DEFAULT ''")
 
         # Настройки по умолчанию (только если таблица пуста)
         if Settings.query.count() == 0:
@@ -360,7 +362,12 @@ def init_db():
                 Settings(key='logo_path', value='', type='string', description='Путь к файлу логотипа'),
                 Settings(key='app_title', value='VNC Manager', type='string', description='Заголовок приложения'),
                 Settings(key='primary_color', value='#4a6cf7', type='string', description='Основной цвет темы'),
-                Settings(key='custom_css', value='', type='string', description='Пользовательские CSS стили')
+                Settings(key='custom_css', value='', type='string', description='Пользовательские CSS стили'),
+                Settings(key='rustdesk_server', value='', type='string', description='Адрес RustDesk-сервера (hbbs/hbbr)'),
+                Settings(key='rustdesk_key', value='', type='string', description='Публичный ключ RustDesk-сервера'),
+                Settings(key='rustdesk_api_url', value='', type='string', description='Адрес панели RustDesk API (lejianwen/rustdesk-api)'),
+                Settings(key='rustdesk_api_user', value='', type='string', description='Логин панели RustDesk API'),
+                Settings(key='rustdesk_api_pass', value='', type='string', description='Пароль панели RustDesk API'),
             ]
             for setting in default_settings:
                 db.session.add(setting)
@@ -818,6 +825,7 @@ def get_servers():
             'last_seen': server.last_seen.isoformat() if server.last_seen else None,
             'comment': server.comment,
             'created_at': server.created_at.isoformat() if server.created_at else None,
+            'rustdesk_id': server.rustdesk_id or '',
             'status': 'online' if statuses.get(server.id) else 'offline'
         }
         
@@ -848,7 +856,8 @@ def add_server():
         ip=data['ip'],
         port=port,
         group_id=data.get('group_id'),
-        comment=data.get('comment', '')
+        comment=data.get('comment', ''),
+        rustdesk_id=(data.get('rustdesk_id') or '').strip(),
     )
     
     db.session.add(server)
@@ -884,6 +893,8 @@ def server_api(server_id):
             server.comment = data['comment']
         if 'is_favorite' in data:
             server.is_favorite = bool(data['is_favorite'])
+        if 'rustdesk_id' in data:
+            server.rustdesk_id = (data['rustdesk_id'] or '').strip()
         
         db.session.commit()
         return jsonify({'success': True})
@@ -1894,6 +1905,369 @@ def novnc_page(server_id):
 </body>
 </html>"""
 
+@app.route('/rustdesk/<int:server_id>')
+def rustdesk_page(server_id):
+    server = Server.query.get(server_id)
+    if not server:
+        return "Сервер не найден", 404
+
+    safe_name = escape(server.name)
+    rustdesk_id = (server.rustdesk_id or '').strip()
+    rd_server = ( _get_setting('rustdesk_server', '') or '').strip()
+    rd_key = ( _get_setting('rustdesk_key', '') or '').strip()
+
+    return f"""<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RustDesk — {safe_name}</title>
+  <style>
+    :root {{
+      --bg: #0f172a; --panel: #111827; --text: #e5e7eb; --muted: #9ca3af;
+      --ok: #10b981; --bad: #ef4444; --btn: #2563eb; --btn2: #374151;
+      --border: rgba(255,255,255,.12);
+    }}
+    html, body {{ height: 100%; margin: 0; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }}
+    button {{
+      height: 34px; border-radius: 8px; border: 1px solid var(--border); cursor: pointer;
+      padding: 0 12px; color: var(--text); background: var(--btn2); font-size: 14px;
+    }}
+    button.primary {{ background: var(--btn); border-color: rgba(37,99,235,.6); }}
+    .modal-backdrop {{
+      position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 100;
+      display: flex; align-items: center; justify-content: center;
+    }}
+    .modal-box {{
+      background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+      padding: 22px; width: 360px; max-width: calc(100vw - 40px);
+    }}
+    .modal-box h3 {{ margin: 0 0 6px; font-size: 16px; }}
+    .modal-box p {{ margin: 0 0 14px; font-size: 12px; color: var(--muted); }}
+    .modal-box label {{ display: block; font-size: 12px; margin-bottom: 6px; }}
+    .modal-box input {{
+      width: 100%; box-sizing: border-box; height: 36px; padding: 0 10px;
+      border-radius: 8px; border: 1px solid var(--border); background: var(--bg);
+      color: var(--text); font-size: 14px; margin-bottom: 12px;
+    }}
+    .modal-box .btns {{ display: flex; gap: 8px; justify-content: flex-end; }}
+    .err {{ color: var(--bad); font-size: 12px; margin-bottom: 10px; display: none; }}
+    .hint {{ font-size: 11px; color: var(--muted); margin-top: 10px; line-height: 1.5; }}
+  </style>
+</head>
+<body>
+  <div class="modal-backdrop" id="setupModal">
+    <div class="modal-box">
+      <h3>RustDesk — {safe_name}</h3>
+      <p>Укажите параметры подключения. Пароль запрашивается каждый раз и не сохраняется.</p>
+      <div class="err" id="errMsg"></div>
+      <label>Сервер (hbbs/hbbr)</label>
+      <input type="text" id="rdServer" placeholder="192.168.17.250" />
+      <label>Ключ сервера (публичный)</label>
+      <input type="text" id="rdKey" placeholder="Публичный ключ сервера" />
+      <label>ID машины RustDesk</label>
+      <input type="text" id="rdId" placeholder="123 456 789" />
+      <div class="btns">
+        <button id="btnCancel">Отмена</button>
+        <button class="primary" id="btnLaunch">Запустить</button>
+      </div>
+      <div class="hint">Браузер выступает управляющей стороной. На удалённой машине должен быть установлен и запущен RustDesk с тем же сервером.</div>
+    </div>
+  </div>
+  <iframe id="rdFrame" src="/rustdesk_web/index.html" style="position:fixed; top:0; left:0; width:100vw; height:100vh; border:none; display:none;"></iframe>
+
+  <script>
+    const serverId = {server.id};
+    const initialServer = {json.dumps(rd_server)};
+    const initialKey = {json.dumps(rd_key)};
+    const initialId = {json.dumps(rustdesk_id)};
+
+    document.getElementById('rdServer').value = initialServer;
+    document.getElementById('rdKey').value = initialKey;
+    document.getElementById('rdId').value = initialId;
+
+    function showErr(msg) {{
+      const el = document.getElementById('errMsg');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }}
+
+    document.getElementById('btnLaunch').addEventListener('click', () => {{
+      const server = document.getElementById('rdServer').value.trim();
+      const id = document.getElementById('rdId').value.trim();
+      if (!server) return showErr('Укажите адрес сервера');
+      if (!id) return showErr('Укажите ID машины');
+      startRd();
+    }});
+
+    document.getElementById('btnCancel').addEventListener('click', () => window.close());
+
+    function startRd() {{
+      const server = document.getElementById('rdServer').value.trim();
+      const key = document.getElementById('rdKey').value.trim();
+      const id = document.getElementById('rdId').value.trim();
+
+      localStorage.setItem('wc-custom-rendezvous-server', server);
+      localStorage.setItem('wc-key', key);
+      localStorage.setItem('wc-id', id);
+
+      document.getElementById('setupModal').style.display = 'none';
+      const frame = document.getElementById('rdFrame');
+      frame.style.display = 'block';
+      frame.onload = function () {{ autoConnectRd(); }};
+      frame.src = '/rustdesk_web/index.html?_rd=' + Date.now();
+    }}
+
+    // Дождаться готовности веб-клиента и запустить подключение к ID напрямую
+    function autoConnectRd() {{
+      const frame = document.getElementById('rdFrame');
+      const server = document.getElementById('rdServer').value.trim();
+      const key = document.getElementById('rdKey').value.trim();
+      const id = document.getElementById('rdId').value.trim();
+      if (!id) return;
+      let attempts = 0;
+      const maxAttempts = 10;
+      function tryConnect() {{
+        attempts++;
+        let w = null;
+        try {{ w = frame.contentWindow; }} catch (e) {{}}
+        if (!w || typeof w.setByName !== 'function') {{
+          if (attempts <= 120) setTimeout(tryConnect, 500);
+          return;
+        }}
+        try {{
+          w.localStorage.setItem('wc-custom-rendezvous-server', server);
+          w.localStorage.setItem('wc-key', key);
+          w.setByName('session_add_sync', JSON.stringify({{ id: id }}));
+          const c = w.curConn;
+          if (c) {{
+            // start() блокируется лицензионной проверкой (gn -> libsodium), пока
+            // не инициализирован sodium; _start() начинает подключение напрямую
+            const fn = (typeof c._start === 'function') ? c._start : c.start;
+            const p = fn.call(c);
+            if (p && typeof p.then === 'function') {{
+              p.catch(function (e) {{
+                console.error('RustDesk connect error', e);
+                // клиент может быть ещё не готов — повторяем
+                if (attempts < maxAttempts) setTimeout(tryConnect, 1500);
+              }});
+            }}
+          }}
+        }} catch (e) {{
+          console.error('RustDesk auto-connect error', e);
+          if (attempts < maxAttempts) setTimeout(tryConnect, 1500);
+        }}
+      }}
+      tryConnect();
+    }}
+
+    // Автостарт: параметры уже прописаны — подключаемся сразу
+    if (initialServer && initialId) {{
+      startRd();
+    }}
+  </script>
+</body>
+</html>"""
+
+
+# ---------------------------------------------------------------------------
+# RustDesk API (lejianwen/rustdesk-api): список устройств и их онлайн-статус
+# ---------------------------------------------------------------------------
+_rd_token_cache = {}
+_rd_token_lock = threading.Lock()
+_RD_ONLINE_WINDOW = 300  # секунд: считаем устройство онлайн
+
+
+def _rustdesk_login(api_url, username, password):
+    """Возвращает (token, error)."""
+    try:
+        r = requests.post(
+            api_url.rstrip('/') + '/api/login',
+            json={'username': username, 'password': password},
+            timeout=8,
+        )
+    except requests.RequestException as e:
+        return None, 'Не удалось подключиться к RustDesk API: %s' % e
+    if r.status_code != 200:
+        return None, 'Ошибка авторизации RustDesk API (HTTP %s): %s' % (r.status_code, r.text[:200])
+    try:
+        data = r.json()
+    except ValueError:
+        return None, 'Некорректный ответ RustDesk API при авторизации'
+    token = data.get('access_token')
+    if not token:
+        return None, 'RustDesk API не вернул токен доступа'
+    return token, None
+
+
+@app.route('/api/rustdesk/devices', methods=['GET'])
+def rustdesk_devices():
+    """Список устройств из панели RustDesk API (lejianwen/rustdesk-api)."""
+    api_url = (_get_setting('rustdesk_api_url', '') or '').strip()
+    username = (_get_setting('rustdesk_api_user', '') or '').strip()
+    password = _get_setting('rustdesk_api_pass', '')
+    if not api_url or not username or not password:
+        return jsonify({'success': False,
+                        'error': 'Настройки RustDesk API не заполнены (адрес панели, логин, пароль).'}), 400
+
+    def get_peer_list(token):
+        return requests.get(
+            api_url.rstrip('/') + '/api/admin/peer/list',
+            params={'page': 1, 'page_size': 500},
+            headers={'api-token': token},
+            timeout=10,
+        )
+
+    token = None
+    with _rd_token_lock:
+        cached = _rd_token_cache.get(api_url)
+        if cached:
+            token = cached
+    if not token:
+        with _rd_token_lock:
+            token, err = _rustdesk_login(api_url, username, password)
+        if err:
+            return jsonify({'success': False, 'error': err}), 502
+        with _rd_token_lock:
+            _rd_token_cache[api_url] = token
+
+    try:
+        r = get_peer_list(token)
+    except requests.RequestException as e:
+        with _rd_token_lock:
+            _rd_token_cache.pop(api_url, None)
+        return jsonify({'success': False, 'error': 'Ошибка запроса к RustDesk API: %s' % e}), 502
+
+    if r.status_code == 403:
+        # Токен протух — перелогиниваемся и пробуем ещё раз
+        with _rd_token_lock:
+            token, err = _rustdesk_login(api_url, username, password)
+        if err:
+            return jsonify({'success': False, 'error': err}), 502
+        with _rd_token_lock:
+            _rd_token_cache[api_url] = token
+        try:
+            r = get_peer_list(token)
+        except requests.RequestException as e:
+            return jsonify({'success': False, 'error': 'Ошибка запроса к RustDesk API: %s' % e}), 502
+
+    if r.status_code != 200:
+        return jsonify({'success': False, 'error': 'RustDesk API вернул HTTP %s' % r.status_code}), 502
+    try:
+        data = r.json()
+    except ValueError:
+        return jsonify({'success': False, 'error': 'Некорректный ответ RustDesk API'}), 502
+
+    payload = data.get('data') or {}
+    peers = payload.get('list') or []
+    now = time.time()
+
+    # Карты привязок и совпадений по IP для кнопки «Добавить»
+    linked_ids = set()
+    ip_server_map = {}
+    for s in Server.query.all():
+        if s.rustdesk_id:
+            linked_ids.add(s.rustdesk_id)
+        if s.ip and s.ip not in ip_server_map:
+            ip_server_map[s.ip] = s
+
+    devices = []
+    for p in peers:
+        last_ts = p.get('last_online_time') or 0
+        online = bool(last_ts) and (now - last_ts) < _RD_ONLINE_WINDOW
+        rd_id = p.get('id') or ''
+        rd_ip = p.get('last_online_ip') or ''
+        matched = ip_server_map.get(rd_ip)
+        devices.append({
+            'id': rd_id,
+            'hostname': p.get('hostname') or '',
+            'os': p.get('os') or '',
+            'username': p.get('username') or '',
+            'alias': p.get('alias') or '',
+            'last_online_time': last_ts,
+            'last_online_ip': rd_ip,
+            'online': online,
+            'linked': bool(rd_id) and rd_id in linked_ids,
+            'matched_server': ({'id': matched.id, 'name': matched.name} if matched else None),
+        })
+    return jsonify({
+        'success': True,
+        'devices': devices,
+        'total': payload.get('total', len(devices)),
+    })
+
+@app.route('/api/rustdesk/add', methods=['POST'])
+def rustdesk_add():
+    """Добавить устройство RustDesk в серверы.
+    Если сервер с таким IP уже есть — прописать к нему RustDesk ID,
+    иначе создать новый сервер."""
+    data = get_json()
+    rd_id = (data.get('id') or '').strip()
+    ip = (data.get('ip') or '').strip()
+
+    if not rd_id:
+        return jsonify({'success': False, 'error': 'Не указан RustDesk ID устройства'}), 400
+    if not ip:
+        return jsonify({'success': False, 'error': 'У устройства нет IP-адреса'}), 400
+
+    existing = Server.query.filter_by(ip=ip).first()
+    if existing:
+        # Прописываем RustDesk ID к уже существующему серверу
+        for other in Server.query.filter(Server.rustdesk_id == rd_id, Server.id != existing.id).all():
+            other.rustdesk_id = ''
+        existing.rustdesk_id = rd_id
+        db.session.commit()
+        return jsonify({
+            'success': True,
+            'action': 'linked',
+            'server_id': existing.id,
+            'server_name': existing.name,
+        })
+
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({'success': False, 'error': 'Введите название сервера'}), 400
+
+    port = _normalize_port(data.get('port', 5900))
+    if port is None:
+        return jsonify({'success': False, 'error': 'Порт должен быть числом от 1 до 65535'}), 400
+
+    group_id = data.get('group_id') or None
+    server = Server(
+        name=name,
+        ip=ip,
+        port=port,
+        group_id=group_id,
+        comment=(data.get('comment') or '').strip(),
+        rustdesk_id=rd_id,
+    )
+    try:
+        db.session.add(server)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        # Конкурентное создание сервера с тем же IP — привязываем к существующему
+        dup = Server.query.filter_by(ip=ip).first()
+        if dup:
+            for other in Server.query.filter(Server.rustdesk_id == rd_id, Server.id != dup.id).all():
+                other.rustdesk_id = ''
+            dup.rustdesk_id = rd_id
+            db.session.commit()
+            return jsonify({
+                'success': True,
+                'action': 'linked',
+                'server_id': dup.id,
+                'server_name': dup.name,
+            })
+        return jsonify({'success': False, 'error': 'Ошибка сохранения сервера'}), 500
+
+    return jsonify({
+        'success': True,
+        'action': 'created',
+        'server_id': server.id,
+        'server_name': server.name,
+    })
+
 @app.route('/api/export', methods=['GET'])
 def export_data():
     """Экспорт всех данных в JSON"""
@@ -2156,6 +2530,10 @@ def get_settings():
     settings = Settings.query.all()
     result = {}
     for setting in settings:
+        # Секреты не отдаём клиенту в открытом виде
+        if setting.key == 'rustdesk_api_pass':
+            result[setting.key] = ''
+            continue
         # Преобразуем значение в соответствии с типом
         if setting.type == 'boolean':
             result[setting.key] = setting.value.lower() == 'true'
@@ -2175,6 +2553,9 @@ def update_settings():
         data = get_json()
         
         for key, value in data.items():
+            # Пустой пароль не перезаписываем (клиент не получает текущее значение)
+            if key == 'rustdesk_api_pass' and not str(value):
+                continue
             setting = Settings.query.filter_by(key=key).first()
             
             if setting:

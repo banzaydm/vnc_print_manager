@@ -1113,6 +1113,10 @@
                         <i class="fas fa-network-wired"></i>
                         <span>Сканирование</span>
                     </button>
+                    <button class="nav-tab" data-page="rustdesk">
+                        <i class="fas fa-tv"></i>
+                        <span>RustDesk</span>
+                    </button>
                 </div>
             </div>
             
@@ -1388,6 +1392,47 @@
                             </div>
                         </div>
 
+                        <div class="settings-section">
+                            <h3 style="margin-bottom: 20px; color: var(--text-primary);">RustDesk</h3>
+
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Сервер (адрес hbbs/hbbr)</label>
+                                <input type="text" id="rdServerInput" class="form-input" placeholder="192.168.17.250">
+                                <small style="display: block; margin-top: 6px; opacity: 0.7; font-size: 12px;">
+                                    Адрес self-hosted RustDesk-сервера. Используется по умолчанию для веб-клиента.
+                                </small>
+                            </div>
+
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Публичный ключ сервера</label>
+                                <input type="text" id="rdKeyInput" class="form-input" placeholder="Публичный ключ сервера">
+                                <small style="display: block; margin-top: 6px; opacity: 0.7; font-size: 12px;">
+                                    Ключ из файла id_ed25519.pub сервера RustDesk.
+                                </small>
+                            </div>
+
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Адрес панели RustDesk API</label>
+                                <input type="text" id="rdApiUrlInput" class="form-input" placeholder="http://192.168.17.250:21114">
+                                <small style="display: block; margin-top: 6px; opacity: 0.7; font-size: 12px;">
+                                    Адрес панели lejianwen/rustdesk-api (обычно порт 21114). Используется для вкладки «RustDesk».
+                                </small>
+                            </div>
+
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Логин панели RustDesk API</label>
+                                <input type="text" id="rdApiUserInput" class="form-input" placeholder="admin" autocomplete="off">
+                            </div>
+
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Пароль панели RustDesk API</label>
+                                <input type="password" id="rdApiPassInput" class="form-input" placeholder="Пароль" autocomplete="off">
+                                <small style="display: block; margin-top: 6px; opacity: 0.7; font-size: 12px;">
+                                    Пароль не отображается. Оставьте поле пустым при сохранении, чтобы не менять текущий пароль.
+                                </small>
+                            </div>
+                        </div>
+
                         <div class="settings-section" id="usersSection" style="display: none;">
                             <h3 style="margin-bottom: 20px; color: var(--text-primary);">Пользователи</h3>
 
@@ -1520,6 +1565,53 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Контейнер для страницы RustDesk -->
+            <div id="rustdeskContainer" style="display: none;">
+                <div class="table-container">
+                    <div class="table-header">
+                        <h2>RustDesk устройства</h2>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <div class="table-stats" id="rustdeskStats">0 устройств</div>
+                            <button class="btn" id="rustdeskRefreshBtn">
+                                <i class="fas fa-sync"></i>
+                                <span>Обновить</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="table-wrapper">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Статус</th>
+                                    <th>ID</th>
+                                    <th>Имя</th>
+                                    <th>ОС</th>
+                                    <th>Пользователь</th>
+                                    <th>IP (последний)</th>
+                                    <th>Последний онлайн</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="rustdeskTable">
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div id="rustdeskEmpty" class="empty-state" style="display: none;">
+                        <div class="empty-icon"><i class="fas fa-tv"></i></div>
+                        <h3 class="empty-title">Устройства не найдены</h3>
+                        <p class="empty-description">Настройте подключение к RustDesk API в настройках и убедитесь, что клиенты подключены к серверу.</p>
+                    </div>
+
+                    <div id="rustdeskError" class="empty-state" style="display: none;">
+                        <div class="empty-icon"><i class="fas fa-exclamation-triangle"></i></div>
+                        <h3 class="empty-title">Не удалось загрузить список</h3>
+                        <p class="empty-description" id="rustdeskErrorMsg"></p>
+                    </div>
+                </div>
+            </div>
         </main>
     </div>
 
@@ -1557,6 +1649,13 @@
                                     <input type="number" id="serverPort" class="form-input" value="5900">
                                 </div>
                             </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">RustDesk ID машины</label>
+                            <input type="text" id="serverRustdeskId" class="form-input" placeholder="123 456 789">
+                            <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                                ID машины в RustDesk (не IP). Позволяет подключиться через веб-клиент.
+                            </small>
                         </div>
                     </div>
                     
@@ -1746,136 +1845,6 @@
             <div class="modal-footer">
                 <button class="btn" onclick="closeModal()">Отмена</button>
                 <button class="btn btn-primary" onclick="restoreSelectedBackup()">Восстановить</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Модальное окно настроек -->
-    <div id="settingsModal" class="modal-overlay">
-        <div class="modal settings-modal">
-            <div class="modal-header">
-                <h3 class="modal-title">Настройки</h3>
-                <button class="modal-close" onclick="closeModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="form-group" style="margin-bottom: 18px;">
-                    <label class="form-label">Внешний вид</label>
-                    
-                    <!-- Загрузка favicon -->
-                    <div style="margin-bottom: 16px;">
-                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Favicon (логотип)</label>
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <input type="file" id="faviconInput" accept=".ico,.png,.jpg,.jpeg,.gif,.svg" style="display: none;">
-                            <button type="button" class="btn btn-sm" onclick="document.getElementById('faviconInput').click()">
-                                <i class="fas fa-upload"></i>
-                                <span>Выбрать файл</span>
-                            </button>
-                            <span id="faviconFileName" style="font-size: 12px; opacity: 0.7;">Файл не выбран</span>
-                        </div>
-                        <div id="faviconPreview" style="margin-top: 8px; display: none;">
-                            <img id="faviconPreviewImg" src="" alt="Preview" style="width: 32px; height: 32px; border: 1px solid var(--card-border); border-radius: 4px;">
-                        </div>
-                    </div>
-                    
-                    <!-- Загрузка логотипа -->
-                    <div style="margin-bottom: 16px;">
-                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Логотип (в шапке)</label>
-                        <div style="display: flex; align-items: center; gap: 12px; flex-wrap: wrap;">
-                            <input type="file" id="logoInput" accept=".png,.jpg,.jpeg,.gif,.svg,.webp" style="display: none;">
-                            <button type="button" class="btn btn-sm" onclick="document.getElementById('logoInput').click()">
-                                <i class="fas fa-upload"></i>
-                                <span>Выбрать файл</span>
-                            </button>
-                            <button type="button" class="btn btn-sm" onclick="resetLogo()" style="background: var(--danger);">
-                                <i class="fas fa-times"></i>
-                                <span>Сбросить</span>
-                            </button>
-                            <span id="logoFileName" style="font-size: 12px; opacity: 0.7;">Файл не выбран</span>
-                        </div>
-                        <div id="logoPreview" style="margin-top: 8px; display: none;">
-                            <img id="logoPreviewImg" src="" alt="Preview" style="max-height: 40px; border: 1px solid var(--card-border); border-radius: 4px;">
-                        </div>
-                    </div>
-                    
-                    <!-- Цветовая схема -->
-                    <div style="margin-bottom: 16px;">
-                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Цветовая схема</label>
-                        <select id="themeSelect" class="form-select">
-                            <option value="light">Светлая</option>
-                            <option value="dark">Темная</option>
-                        </select>
-                    </div>
-                    
-                    <!-- Основной цвет -->
-                    <div style="margin-bottom: 16px;">
-                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Основной цвет</label>
-                        <div style="display: flex; align-items: center; gap: 12px;">
-                            <input type="color" id="primaryColorInput" value="#4a6cf7" style="width: 50px; height: 36px; border: 1px solid var(--input-border); border-radius: 6px; cursor: pointer;">
-                            <input type="text" id="primaryColorText" class="form-input" value="#4a6cf7" style="flex: 1; font-family: monospace;" placeholder="#4a6cf7">
-                        </div>
-                    </div>
-                    
-                    <!-- Название приложения -->
-                    <div style="margin-bottom: 16px;">
-                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">Название приложения</label>
-                        <input type="text" id="appTitleInput" class="form-input" value="VNC Manager" placeholder="VNC Manager">
-                    </div>
-                </div>
-
-                <div class="form-group" style="margin-bottom: 18px;">
-                    <label class="form-label">Безопасность</label>
-                    <div style="margin-bottom: 16px;">
-                        <label class="form-label" style="margin-bottom: 8px; font-size: 12px;">API ключ (если включён на сервере)</label>
-                        <input type="password" id="apiKeyInput" class="form-input" placeholder="Введите API_KEY сервера" autocomplete="off">
-                        <small style="display: block; margin-top: 6px; opacity: 0.7; font-size: 12px;">
-                            Ключ хранится локально в браузере и отправляется в заголовке X-API-Key.
-                        </small>
-                    </div>
-                </div>
-
-                <div class="form-group" style="margin-bottom: 18px;">
-                    <label class="form-label">Данные</label>
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <button class="btn" onclick="showImportExportModal()">
-                            <i class="fas fa-file-export"></i>
-                            <span>Импорт / Экспорт</span>
-                        </button>
-                        <button class="btn" onclick="createBackup()">
-                            <i class="fas fa-download"></i>
-                            <span>Сделать Backup</span>
-                        </button>
-                        <button class="btn" onclick="showRestoreModal()">
-                            <i class="fas fa-upload"></i>
-                            <span>Восстановить</span>
-                        </button>
-                    </div>
-                </div>
-
-                <div class="form-group" style="margin-bottom: 18px;">
-                    <label class="form-label">Очистка базы (выборочно)</label>
-                    <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 10px;">
-                        <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="checkbox" id="clearDbServers" checked>
-                            Серверы
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="checkbox" id="clearDbPrinters" checked>
-                            Принтеры
-                        </label>
-                        <label style="display: flex; align-items: center; gap: 8px;">
-                            <input type="checkbox" id="clearDbGroups" checked>
-                            Группы
-                        </label>
-                    </div>
-                    <button class="btn" onclick="openSelectiveClearModal()" style="margin-top: 14px;">
-                        <i class="fas fa-broom"></i>
-                        <span>Очистить</span>
-                    </button>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button class="btn" onclick="saveSettings()">Сохранить</button>
-                <button class="btn" onclick="closeModal()">Закрыть</button>
             </div>
         </div>
     </div>
@@ -2095,6 +2064,7 @@
                 toggleGroupFilterMenu();
             });
             document.getElementById('refreshBtn')?.addEventListener('click', loadData);
+            document.getElementById('rustdeskRefreshBtn')?.addEventListener('click', loadRustdeskDevices);
 
             document.addEventListener('click', (e) => {
                 const menu = document.getElementById('groupFilterMenu');
@@ -2503,6 +2473,7 @@
             document.getElementById('allGroupsContainer').style.display = 'none';
             document.getElementById('subnetsContainer').style.display = 'none';
             document.getElementById('scanContainer').style.display = 'none';
+            document.getElementById('rustdeskContainer').style.display = 'none';
             document.getElementById('settingsContainer').style.display = 'none';
             
             // Дополнительная очистка для гарантии
@@ -2534,6 +2505,10 @@
                 // Показываем страницу сканирования
                 document.getElementById('scanContainer').style.display = 'block';
                 initScanPage();
+            } else if (page === 'rustdesk') {
+                // Показываем страницу RustDesk
+                document.getElementById('rustdeskContainer').style.display = 'block';
+                loadRustdeskDevices();
             } else {
                 // Показываем страницу устройств
                 document.getElementById('devicesControls').style.display = 'flex';
@@ -2961,13 +2936,17 @@
 
             const actions = device.type === 'server'
                 ? `
-                    <button class="action-btn action-connect" onclick="event.stopPropagation(); connectToServer(${device.id})">
-                        <i class="fas fa-link"></i>
+                    <button class="action-btn" onclick="event.stopPropagation(); connectToServer(${device.id}, '${escapeHtml(device.rustdesk_id || '')}')" title="Подключиться через десктопный RustDesk">
+                        <i class="fas fa-tv"></i>
                         <span>Подключиться</span>
                     </button>
                     <button class="action-btn" onclick="event.stopPropagation(); openNoVnc(${device.id})" title="Открыть noVNC в браузере">
                         <i class="fas fa-desktop"></i>
                         <span>noVNC</span>
+                    </button>
+                    <button class="action-btn" onclick="event.stopPropagation(); openRustDesk(${device.id})" title="Открыть веб-клиент RustDesk">
+                        <i class="fas fa-tv"></i>
+                        <span>WebDesk</span>
                     </button>
                 `
                 : `
@@ -3837,13 +3816,17 @@
                         <td>
                             <div class="actions">
                                 ${device.type === 'server' ? `
-                                    <button class="action-btn action-connect" onclick="connectToServer(${device.id})">
-                                        <i class="fas fa-link"></i>
+                                    <button class="action-btn" onclick="connectToServer(${device.id}, '${escapeHtml(device.rustdesk_id || '')}')" title="Подключиться через десктопный RustDesk">
+                                        <i class="fas fa-tv"></i>
                                         <span>Подключиться</span>
                                     </button>
                                     <button class="action-btn" onclick="openNoVnc(${device.id})" title="Открыть noVNC в браузере">
                                         <i class="fas fa-desktop"></i>
                                         <span>noVNC</span>
+                                    </button>
+                                    <button class="action-btn" onclick="openRustDesk(${device.id})" title="Открыть веб-клиент RustDesk">
+                                        <i class="fas fa-tv"></i>
+                                        <span>WebDesk</span>
                                     </button>
                                 ` : `
                                     <button class="action-btn action-connect" onclick="openPrinterInterface('${escapeHtml(device.web_interface || '')}', '${device.ip}')">
@@ -4310,6 +4293,7 @@
         function showDeviceModal(deviceId = null, type = null) {
             editingDeviceId = deviceId;
             editingDeviceType = type;
+            rustdeskAddPending = null;
             
             const modal = document.getElementById('deviceModal');
             const title = document.querySelector('#deviceModal .modal-title');
@@ -4345,6 +4329,7 @@
                     if (type === 'server') {
                         document.getElementById('serverIp').value = device.ip;
                         document.getElementById('serverPort').value = device.port || 5900;
+                        document.getElementById('serverRustdeskId').value = device.rustdesk_id || '';
                     } else {
                         document.getElementById('printerIp').value = device.ip;
                         document.getElementById('printerInterface').value = device.web_interface || '';
@@ -4356,6 +4341,22 @@
         }
         
         async function saveDevice() {
+            if (rustdeskAddPending) {
+                const pending = rustdeskAddPending;
+                const name = document.getElementById('deviceName').value.trim();
+                if (!name) {
+                    showNotification('Введите название сервера', 'error');
+                    return;
+                }
+                await rustdeskAddRequest(
+                    pending.id,
+                    document.getElementById('serverIp').value.trim(),
+                    name,
+                    document.getElementById('deviceGroup').value || null
+                );
+                return;
+            }
+
             const type = document.getElementById('deviceType').value;
             
             if (!type) {
@@ -4378,6 +4379,7 @@
                 if (type === 'server') {
                     data.ip = document.getElementById('serverIp').value.trim();
                     data.port = parseInt(document.getElementById('serverPort').value) || 5900;
+                    data.rustdesk_id = document.getElementById('serverRustdeskId').value.trim();
                     
                     if (!data.ip) {
                         showNotification('Введите IP адрес сервера', 'error');
@@ -4688,24 +4690,51 @@
             editingDeviceId = null;
             editingDeviceType = null;
             editingGroupId = null;
+            rustdeskAddPending = null;
         }
         
-        async function connectToServer(serverId) {
-            try {
-                const response = await fetch(`/api/connect/${serverId}`, {
-                    method: 'POST'
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    showNotification(result.message, 'success');
-                } else {
-                    showVncErrorModal(result);
-                }
-            } catch (error) {
-                showNotification('Ошибка подключения', 'error');
+        function connectToServer(serverId, rustdeskId) {
+            const cleanId = (rustdeskId || '').replace(/\s+/g, '');
+            if (!cleanId) {
+                showRustDeskIdError();
+                return;
             }
+
+            const link = 'rustdesk://' + cleanId;
+            const a = document.createElement('a');
+            a.href = link;
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+
+            showNotification('Запускаю RustDesk...', 'success');
+        }
+
+        function showRustDeskIdError() {
+            const modal = document.createElement('div');
+            modal.className = 'modal-overlay active';
+            modal.innerHTML = `
+                <div class="modal">
+                    <div class="modal-header">
+                        <h3 class="modal-title">ID RustDesk не указан</h3>
+                        <button class="modal-close" onclick="this.parentElement.parentElement.remove()">&times;</button>
+                    </div>
+                    <div class="modal-body">
+                        <p>Для подключения через десктопный RustDesk у сервера должен быть указан ID машины в RustDesk.</p>
+                        <div style="margin-top: 15px; background: var(--primary-light); padding: 12px; border-radius: 6px;">
+                            <p style="margin-bottom: 5px;">Укажите ID машины в настройках сервера:</p>
+                            <p style="margin-bottom: 5px;">1. Нажмите «Изменить» у сервера.</p>
+                            <p style="margin-bottom: 0;">2. Заполните поле «ID машины в RustDesk (не IP)».</p>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button class="btn" onclick="this.parentElement.parentElement.remove()">Закрыть</button>
+                    </div>
+                </div>
+            `;
+
+            document.body.appendChild(modal);
         }
 
         function openNoVnc(serverId) {
@@ -4726,7 +4755,208 @@
                 novncWindow.focus();
             }
         }
+
+        function openRustDesk(serverId) {
+            const url = `/rustdesk/${serverId}`;
+            const windowFeatures = [
+                'width=1200',
+                'height=800',
+                'resizable=yes',
+                'scrollbars=yes',
+                'status=yes',
+                'toolbar=no',
+                'menubar=no',
+                'location=no'
+            ].join(',');
+
+            const rdWindow = window.open(url, '_blank', windowFeatures);
+            if (rdWindow) {
+                rdWindow.focus();
+            }
+        }
         
+        function formatRdTime(unixTs) {
+            if (!unixTs) return '—';
+            try {
+                const d = new Date(unixTs * 1000);
+                const pad = (n) => String(n).padStart(2, '0');
+                return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+            } catch (e) {
+                return '—';
+            }
+        }
+
+        let rustdeskLoading = false;
+        let rustdeskDevices = [];
+        let rustdeskAddPending = null;
+        async function loadRustdeskDevices() {
+            if (rustdeskLoading) return;
+            rustdeskLoading = true;
+            const tbody = document.getElementById('rustdeskTable');
+            const stats = document.getElementById('rustdeskStats');
+            const emptyBox = document.getElementById('rustdeskEmpty');
+            const errBox = document.getElementById('rustdeskError');
+            const errMsg = document.getElementById('rustdeskErrorMsg');
+            const refreshBtn = document.getElementById('rustdeskRefreshBtn');
+            if (refreshBtn) {
+                refreshBtn.disabled = true;
+                const icon = refreshBtn.querySelector('i');
+                if (icon) icon.classList.add('fa-spin');
+            }
+
+            try {
+                const response = await fetch('/api/rustdesk/devices');
+                let data = null;
+                try {
+                    data = await response.json();
+                } catch (e) {
+                    data = null;
+                }
+
+                if (!response.ok || !data || !data.success) {
+                    const message = (data && data.error) ? data.error : ('HTTP ' + response.status);
+                    if (errMsg) errMsg.textContent = message;
+                    if (errBox) errBox.style.display = 'block';
+                    if (tbody) tbody.innerHTML = '';
+                    if (emptyBox) emptyBox.style.display = 'none';
+                    if (stats) stats.textContent = '—';
+                    return;
+                }
+
+                const devices = data.devices || [];
+                rustdeskDevices = devices;
+                if (errBox) errBox.style.display = 'none';
+                if (tbody) {
+                    if (devices.length === 0) {
+                        tbody.innerHTML = '';
+                        if (emptyBox) emptyBox.style.display = 'block';
+                    } else {
+                        if (emptyBox) emptyBox.style.display = 'none';
+                        const onlineCount = devices.filter(d => d.online).length;
+                        tbody.innerHTML = devices.map((d, index) => {
+                            const status = d.online
+                                ? '<span class="status-dot" style="background:#10b981;"></span><span style="color:#10b981;">Онлайн</span>'
+                                : '<span class="status-dot" style="background:#6b7280;"></span><span style="color:#9ca3af;">Оффлайн</span>';
+                            const hasIp = !!(d.last_online_ip || '').trim();
+                            let actions;
+                            if (d.linked) {
+                                actions = `<span style="color:#10b981; margin-right:6px;"><i class="fas fa-check-circle"></i> Уже добавлен</span>
+                                    <button class="btn btn-sm" onclick="rustdeskAdd(${index})">Обновить</button>`;
+                            } else if (hasIp) {
+                                actions = `<button class="btn btn-sm" onclick="rustdeskAdd(${index})">Добавить</button>`;
+                            } else {
+                                actions = `<button class="btn btn-sm" disabled title="У устройства нет IP-адреса">Добавить</button>`;
+                            }
+                            return `<tr>
+                                <td>${status}</td>
+                                <td><code>${escapeHtml(d.id || '')}</code></td>
+                                <td>${escapeHtml(d.alias || d.hostname || '—')}</td>
+                                <td>${escapeHtml(d.os || '—')}</td>
+                                <td>${escapeHtml(d.username || '—')}</td>
+                                <td>${escapeHtml(d.last_online_ip || '—')}</td>
+                                <td>${formatRdTime(d.last_online_time)}</td>
+                                <td>${actions}</td>
+                            </tr>`;
+                        }).join('');
+                    }
+                }
+                if (stats) {
+                    stats.textContent = `${devices.length} устройств · онлайн ${devices.filter(d => d.online).length}`;
+                }
+            } catch (error) {
+                console.error('Ошибка загрузки RustDesk устройств:', error);
+                if (errMsg) errMsg.textContent = error.message || 'Неизвестная ошибка';
+                if (errBox) errBox.style.display = 'block';
+                if (emptyBox) emptyBox.style.display = 'none';
+                if (stats) stats.textContent = '—';
+            } finally {
+                rustdeskLoading = false;
+                if (refreshBtn) {
+                    refreshBtn.disabled = false;
+                    const icon = refreshBtn.querySelector('i');
+                    if (icon) icon.classList.remove('fa-spin');
+                }
+            }
+        }
+
+        // Добавление устройства RustDesk в список серверов
+        async function rustdeskAdd(index) {
+            const d = rustdeskDevices[index];
+            if (!d) return;
+            const rdId = (d.id || '').trim();
+            const ip = (d.last_online_ip || '').trim();
+            if (!ip) {
+                showNotification('У устройства нет IP-адреса', 'error');
+                return;
+            }
+
+            if (d.matched_server) {
+                const ok = confirm(`Найден сервер «${d.matched_server.name}» с IP ${ip}.\nПрописать RustDesk ID к нему?`);
+                if (!ok) return;
+                await rustdeskAddRequest(rdId, ip, null, null);
+            } else if (d.linked) {
+                const ok = confirm('Устройство уже добавлено.\nПерезаписать привязку RustDesk ID?');
+                if (!ok) return;
+                await rustdeskAddRequest(rdId, ip, null, null);
+            } else {
+                // Открываем модалку добавления сервера с предзаполненными данными
+                rustdeskAddPending = { id: rdId, ip: ip };
+                const modal = document.getElementById('deviceModal');
+                const title = document.querySelector('#deviceModal .modal-title');
+                const form = document.getElementById('deviceForm');
+                form.reset();
+                title.textContent = 'Добавить сервер из RustDesk';
+                document.getElementById('deviceType').value = 'server';
+                document.getElementById('deviceType').dispatchEvent(new Event('change'));
+                document.getElementById('deviceName').value = (d.alias || d.hostname || rdId).trim();
+                document.getElementById('serverIp').value = ip;
+                document.getElementById('serverPort').value = '5900';
+                document.getElementById('serverRustdeskId').value = rdId;
+                if (d.os) document.getElementById('deviceComment').value = 'RustDesk: ' + d.os;
+                modal.classList.add('active');
+            }
+        }
+
+        async function rustdeskAddRequest(rdId, ip, name, groupId) {
+            const payload = { id: rdId, ip: ip };
+            if (name) payload.name = name;
+            if (groupId) payload.group_id = groupId;
+            try {
+                const response = await fetch('/api/rustdesk/add', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const result = await response.json();
+                if (response.ok) {
+                    rustdeskAddPending = null;
+                    closeModal();
+                    if (result.action === 'created') {
+                        showNotification(`Сервер «${result.server_name}» добавлен`, 'success');
+                    } else {
+                        showNotification(`RustDesk ID прописан к серверу «${result.server_name}»`, 'success');
+                    }
+                    await loadDevices();
+                    renderDevices();
+                    loadRustdeskDevices();
+                    return true;
+                } else {
+                    showNotification(result.error || 'Ошибка сохранения', 'error');
+                    return false;
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+                return false;
+            }
+        }
+
+        // Автообновление списка RustDesk (раз в 30 секунд, только на активной вкладке)
+        setInterval(() => {
+            if (currentPage === 'rustdesk') {
+                loadRustdeskDevices();
+            }
+        }, 30000);
+
         function showVncErrorModal(result) {
             const modal = document.createElement('div');
             modal.className = 'modal-overlay active';
@@ -4968,6 +5198,17 @@
                 const appTitleInput = document.getElementById('appTitleInput');
                 if (appTitleInput) appTitleInput.value = settings.app_title || 'VNC Manager';
 
+                const rdServerInput = document.getElementById('rdServerInput');
+                if (rdServerInput) rdServerInput.value = settings.rustdesk_server || '';
+                const rdKeyInput = document.getElementById('rdKeyInput');
+                if (rdKeyInput) rdKeyInput.value = settings.rustdesk_key || '';
+
+                const rdApiUrlInput = document.getElementById('rdApiUrlInput');
+                if (rdApiUrlInput) rdApiUrlInput.value = settings.rustdesk_api_url || '';
+                const rdApiUserInput = document.getElementById('rdApiUserInput');
+                if (rdApiUserInput) rdApiUserInput.value = settings.rustdesk_api_user || '';
+                // Пароль панели не возвращается сервером — оставляем поле пустым
+
                 const apiKeyInput = document.getElementById('apiKeyInput');
                 if (apiKeyInput) apiKeyInput.value = localStorage.getItem('vnc_api_key') || '';
                 
@@ -5025,6 +5266,18 @@
                     primary_color: primaryColorInput.value,
                     app_title: appTitleInput.value
                 };
+
+                const rdServerInput = document.getElementById('rdServerInput');
+                const rdKeyInput = document.getElementById('rdKeyInput');
+                if (rdServerInput) settings.rustdesk_server = rdServerInput.value.trim();
+                if (rdKeyInput) settings.rustdesk_key = rdKeyInput.value.trim();
+
+                const rdApiUrlInput = document.getElementById('rdApiUrlInput');
+                const rdApiUserInput = document.getElementById('rdApiUserInput');
+                const rdApiPassInput = document.getElementById('rdApiPassInput');
+                if (rdApiUrlInput) settings.rustdesk_api_url = rdApiUrlInput.value.trim();
+                if (rdApiUserInput) settings.rustdesk_api_user = rdApiUserInput.value.trim();
+                if (rdApiPassInput && rdApiPassInput.value) settings.rustdesk_api_pass = rdApiPassInput.value;
                 
                 const response = await fetch('/api/settings', {
                     method: 'POST',
@@ -5718,6 +5971,8 @@
         window.importData = importData;
         window.connectToServer = connectToServer;
         window.openNoVnc = openNoVnc;
+        window.openRustDesk = openRustDesk;
+        window.rustdeskAdd = rustdeskAdd;
         window.openPrinterInterface = openPrinterInterface;
         window.editDevice = editDevice;
         window.editGroup = editGroup;
