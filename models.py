@@ -17,6 +17,8 @@ class Group(db.Model):
 
     servers = db.relationship('Server', backref='group', lazy=True)
     printers = db.relationship('Printer', backref='group', lazy=True)
+    cameras = db.relationship('Camera', backref='group', lazy=True)
+    routers = db.relationship('Router', backref='group', lazy=True)
 
     def __repr__(self):
         return f'<Group {self.name}>'
@@ -51,6 +53,43 @@ class Printer(db.Model):
 
     def __repr__(self):
         return f'<Printer {self.name} ({self.ip})>'
+
+
+class Camera(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    ip = db.Column(db.String(45), unique=True, nullable=False)
+    port = db.Column(db.Integer, default=80)
+    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True)
+    web_interface = db.Column(db.String(500), default='')
+    rtsp_url = db.Column(db.String(500), default='')
+    username = db.Column(db.String(100), default='')
+    password = db.Column(db.String(200), default='')
+    is_favorite = db.Column(db.Boolean, default=False)
+    status = db.Column(db.Boolean, default=False)
+    comment = db.Column(db.Text, default='')
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+    def __repr__(self):
+        return f'<Camera {self.name} ({self.ip})>'
+
+
+class Router(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    ip = db.Column(db.String(45), unique=True, nullable=False)
+    port = db.Column(db.Integer, default=80)
+    group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True)
+    web_interface = db.Column(db.String(500), default='')
+    username = db.Column(db.String(100), default='')
+    password = db.Column(db.String(200), default='')
+    is_favorite = db.Column(db.Boolean, default=False)
+    status = db.Column(db.Boolean, default=False)
+    comment = db.Column(db.Text, default='')
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+    def __repr__(self):
+        return f'<Router {self.name} ({self.ip})>'
 
 
 class User(db.Model):

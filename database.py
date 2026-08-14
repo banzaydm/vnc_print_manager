@@ -4,7 +4,7 @@
 Этот файл оставлен для совместимости, но не используется напрямую.
 """
 
-from models import db, Group, Server, Printer
+from models import db, Group, Server, Printer, Camera, Router
 
 def init_database():
     """

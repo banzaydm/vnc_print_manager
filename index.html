@@ -421,6 +421,16 @@
             color: #8b5cf6;
         }
         
+        .type-camera {
+            background: rgba(16, 185, 129, 0.1);
+            color: #10b981;
+        }
+        
+        .type-router {
+            background: rgba(245, 158, 11, 0.1);
+            color: #f59e0b;
+        }
+        
         /* Статус */
         .status-badge {
             display: inline-flex;
@@ -1101,6 +1111,14 @@
                         <i class="fas fa-print"></i>
                         <span>Принтеры</span>
                     </button>
+                    <button class="nav-tab" data-page="cameras">
+                        <i class="fas fa-video"></i>
+                        <span>Камеры</span>
+                    </button>
+                    <button class="nav-tab" data-page="routers">
+                        <i class="fas fa-network-wired"></i>
+                        <span>Роутеры</span>
+                    </button>
                     <button class="nav-tab" data-page="groups">
                         <i class="fas fa-tags"></i>
                         <span>Группы</span>
@@ -1155,6 +1173,8 @@
                         <option value="all">Все типы</option>
                         <option value="server">Серверы</option>
                         <option value="printer">Принтеры</option>
+                        <option value="camera">Камеры</option>
+                        <option value="router">Роутеры</option>
                     </select>
                     <select id="statusFilter" class="filter-select">
                         <option value="all">Все статусы</option>
@@ -1630,6 +1650,8 @@
                             <option value="">Выберите тип</option>
                             <option value="server">VNC Сервер</option>
                             <option value="printer">Принтер</option>
+                            <option value="camera">Камера</option>
+                            <option value="router">Роутер</option>
                         </select>
                     </div>
                     
@@ -1667,6 +1689,60 @@
                         <div class="form-group">
                             <label class="form-label">Веб-интерфейс</label>
                             <input type="text" id="printerInterface" class="form-input" placeholder="http://192.168.1.50">
+                        </div>
+                    </div>
+
+                    <div id="cameraFields" style="display: none;">
+                        <div class="form-group">
+                            <label class="form-label">IP адрес и порт</label>
+                            <div style="display: flex; gap: 12px; align-items: center;">
+                                <div style="flex: 2;">
+                                    <input type="text" id="cameraIp" class="form-input" placeholder="192.168.1.64" required>
+                                </div>
+                                <div style="flex: 1;">
+                                    <input type="number" id="cameraPort" class="form-input" value="80">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Веб-интерфейс</label>
+                            <input type="text" id="cameraInterface" class="form-input" placeholder="http://192.168.1.64">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">RTSP поток</label>
+                            <input type="text" id="cameraRtspUrl" class="form-input" placeholder="rtsp://192.168.1.64:554/">
+                        </div>
+                    </div>
+
+                    <div id="routerFields" style="display: none;">
+                        <div class="form-group">
+                            <label class="form-label">IP адрес и порт</label>
+                            <div style="display: flex; gap: 12px; align-items: center;">
+                                <div style="flex: 2;">
+                                    <input type="text" id="routerIp" class="form-input" placeholder="192.168.1.1" required>
+                                </div>
+                                <div style="flex: 1;">
+                                    <input type="number" id="routerPort" class="form-input" value="80">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Веб-интерфейс</label>
+                            <input type="text" id="routerInterface" class="form-input" placeholder="http://192.168.1.1">
+                        </div>
+                    </div>
+
+                    <div id="webDeviceCredentials" style="display: none;">
+                        <div class="form-group">
+                            <label class="form-label">Логин</label>
+                            <input type="text" id="deviceUsername" class="form-input" placeholder="admin">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Пароль</label>
+                            <input type="password" id="devicePassword" class="form-input" placeholder="••••••">
+                            <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                                Сохраняется только на этом сервере, в открытом виде не отображается.
+                            </small>
                         </div>
                     </div>
                     
@@ -2089,6 +2165,9 @@
                 const type = this.value;
                 document.getElementById('serverFields').style.display = type === 'server' ? 'block' : 'none';
                 document.getElementById('printerFields').style.display = type === 'printer' ? 'block' : 'none';
+                document.getElementById('cameraFields').style.display = type === 'camera' ? 'block' : 'none';
+                document.getElementById('routerFields').style.display = type === 'router' ? 'block' : 'none';
+                document.getElementById('webDeviceCredentials').style.display = (type === 'camera' || type === 'router') ? 'block' : 'none';
                 
                 if (type === 'server') {
                     document.getElementById('printerIp').value = '';
@@ -2184,17 +2263,21 @@
         
         async function loadDevices() {
             try {
-                const [serversResponse, printersResponse] = await Promise.all([
+                const [serversResponse, printersResponse, camerasResponse, routersResponse] = await Promise.all([
                     fetch('/api/servers'),
-                    fetch('/api/printers')
+                    fetch('/api/printers'),
+                    fetch('/api/cameras'),
+                    fetch('/api/routers')
                 ]);
                 
-                if (!serversResponse.ok || !printersResponse.ok) {
+                if (!serversResponse.ok || !printersResponse.ok || !camerasResponse.ok || !routersResponse.ok) {
                     throw new Error('Ошибка загрузки устройств');
                 }
                 
                 const servers = await serversResponse.json();
                 const printers = await printersResponse.json();
+                const cameras = await camerasResponse.json();
+                const routers = await routersResponse.json();
                 
                 devices = [
                     ...servers.map(server => ({
@@ -2208,6 +2291,18 @@
                         type: 'printer',
                         typeIcon: 'fa-print',
                         typeText: 'Принтер'
+                    })),
+                    ...cameras.map(camera => ({
+                        ...camera,
+                        type: 'camera',
+                        typeIcon: 'fa-video',
+                        typeText: 'Камера'
+                    })),
+                    ...routers.map(router => ({
+                        ...router,
+                        type: 'router',
+                        typeIcon: 'fa-network-wired',
+                        typeText: 'Роутер'
                     }))
                 ];
                 
@@ -2233,15 +2328,24 @@
         }
         
         // Функция немедленного обновления интерфейса (оптимистичное обновление)
+        function deviceTypeInfo(type) {
+            if (type === 'server') return { typeIcon: 'fa-server', typeText: 'Сервер' };
+            if (type === 'printer') return { typeIcon: 'fa-print', typeText: 'Принтер' };
+            if (type === 'camera') return { typeIcon: 'fa-video', typeText: 'Камера' };
+            if (type === 'router') return { typeIcon: 'fa-network-wired', typeText: 'Роутер' };
+            return { typeIcon: 'fa-server', typeText: 'Устройство' };
+        }
+
         function immediateUIUpdate(action, deviceData, type) {
             if (action === 'add') {
                 // Добавляем устройство в локальный массив немедленно
+                const info = deviceTypeInfo(type);
                 const newDevice = {
                     ...deviceData,
                     id: 'temp_' + Date.now(), // Временный ID
                     type: type,
-                    typeIcon: type === 'server' ? 'fa-server' : 'fa-print',
-                    typeText: type === 'server' ? 'Сервер' : 'Принтер'
+                    typeIcon: info.typeIcon,
+                    typeText: info.typeText
                 };
                 devices.push(newDevice);
             } else if (action === 'update') {
@@ -2633,6 +2737,16 @@
                 .map(device => renderScanDevice(device))
                 .join('');
 
+            const camerasHtml = scanResults
+                .filter(r => r.type === 'camera')
+                .map(device => renderScanDevice(device))
+                .join('');
+
+            const routersHtml = scanResults
+                .filter(r => r.type === 'router')
+                .map(device => renderScanDevice(device))
+                .join('');
+
             listDiv.innerHTML = `
                 ${serversHtml ? `
                     <div style="margin-bottom: 24px;">
@@ -2645,12 +2759,32 @@
                     </div>
                 ` : ''}
                 ${printersHtml ? `
-                    <div>
+                    <div style="margin-bottom: 24px;">
                         <h3 style="margin-bottom: 12px; color: var(--text-color);">
                             <i class="fas fa-print"></i> Найденные принтеры (${scanResults.filter(r => r.type === 'printer').length})
                         </h3>
                         <div style="display: grid; gap: 12px;">
                             ${printersHtml}
+                        </div>
+                    </div>
+                ` : ''}
+                ${camerasHtml ? `
+                    <div style="margin-bottom: 24px;">
+                        <h3 style="margin-bottom: 12px; color: var(--text-color);">
+                            <i class="fas fa-video"></i> Найденные камеры (${scanResults.filter(r => r.type === 'camera').length})
+                        </h3>
+                        <div style="display: grid; gap: 12px;">
+                            ${camerasHtml}
+                        </div>
+                    </div>
+                ` : ''}
+                ${routersHtml ? `
+                    <div>
+                        <h3 style="margin-bottom: 12px; color: var(--text-color);">
+                            <i class="fas fa-network-wired"></i> Найденные роутеры (${scanResults.filter(r => r.type === 'router').length})
+                        </h3>
+                        <div style="display: grid; gap: 12px;">
+                            ${routersHtml}
                         </div>
                     </div>
                 ` : ''}
@@ -2684,8 +2818,8 @@
 
             return `
                 <div class="card" style="padding: 8px; display: flex; align-items: center; gap: 8px;">
-                    <div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 28px; height: 28px; font-size: 12px;">
-                        <i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i>
+                    <div class="type-icon type-${device.type}" style="width: 28px; height: 28px; font-size: 12px;">
+                        <i class="fas ${deviceTypeInfo(device.type).typeIcon}"></i>
                     </div>
                     <div style="flex: 1; min-width: 0;">
                         <div style="font-weight: 600; margin-bottom: 1px; font-size: 13px;">
@@ -2729,7 +2863,8 @@
             const deviceTypeSelect = document.getElementById('deviceType');
             
             // Устанавливаем заголовок
-            title.textContent = type === 'server' ? 'Добавить VNC сервер' : 'Добавить принтер';
+            const typeNames = { server: 'Добавить VNC сервер', printer: 'Добавить принтер', camera: 'Добавить камеру', router: 'Добавить роутер' };
+            title.textContent = typeNames[type] || 'Добавить устройство';
             
             // Устанавливаем тип устройства
             deviceTypeSelect.value = type;
@@ -2744,9 +2879,18 @@
             if (type === 'server') {
                 document.getElementById('serverIp').value = deviceData.ip;
                 document.getElementById('serverPort').value = deviceData.port || 5900;
-            } else {
+            } else if (type === 'printer') {
                 document.getElementById('printerIp').value = deviceData.ip;
                 document.getElementById('printerInterface').value = deviceData.web_interface || `http://${deviceData.ip}`;
+            } else if (type === 'camera') {
+                document.getElementById('cameraIp').value = deviceData.ip;
+                document.getElementById('cameraPort').value = deviceData.port || 80;
+                document.getElementById('cameraInterface').value = deviceData.web_interface || `http://${deviceData.ip}`;
+                document.getElementById('cameraRtspUrl').value = deviceData.rtsp_url || '';
+            } else if (type === 'router') {
+                document.getElementById('routerIp').value = deviceData.ip;
+                document.getElementById('routerPort').value = deviceData.port || 80;
+                document.getElementById('routerInterface').value = deviceData.web_interface || `http://${deviceData.ip}`;
             }
             
             // Показываем модальное окно
@@ -2763,7 +2907,17 @@
                     group_id: null
                 };
 
-                const endpoint = type === 'server' ? '/api/servers' : '/api/printers';
+                if (type === 'camera') {
+                    payload.rtsp_url = deviceData.rtsp_url || `rtsp://${deviceData.ip}:554/`;
+                }
+                if (type === 'camera' || type === 'router') {
+                    payload.web_interface = deviceData.web_interface || `http://${deviceData.ip}`;
+                }
+
+                const apiPath = type === 'server' ? 'servers'
+                    : type === 'printer' ? 'printers'
+                    : type === 'camera' ? 'cameras' : 'routers';
+                const endpoint = `/api/${apiPath}`;
                 const response = await fetch(endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -2932,7 +3086,7 @@
         function _renderDeviceTableRow(device) {
             const status = device.status || 'offline';
             const fav = `<button class="favorite-btn ${device.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${device.id}, '${device.type}', ${device.is_favorite ? 'false' : 'true'})"><i class="fas fa-star"></i></button>`;
-            const icon = `<div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 26px; height: 26px;"><i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i></div>`;
+            const icon = `<div class="type-icon type-${device.type}" style="width: 26px; height: 26px;"><i class="fas ${deviceTypeInfo(device.type).typeIcon}"></i></div>`;
 
             const actions = device.type === 'server'
                 ? `
@@ -2954,6 +3108,12 @@
                         <i class="fas fa-external-link-alt"></i>
                         <span>Веб-интерфейс</span>
                     </button>
+                    ${device.type === 'camera' && device.rtsp_url ? `
+                        <button class="action-btn" onclick="event.stopPropagation(); openExternalUrl('${escapeHtml(device.rtsp_url)}')" title="Открыть RTSP поток">
+                            <i class="fas fa-video"></i>
+                            <span>RTSP</span>
+                        </button>
+                    ` : ''}
                 `;
 
             const editDelete = `
@@ -3098,7 +3258,7 @@
 
             function _renderSubnetDeviceTableRow(device) {
                 const status = device.status || 'offline';
-                const icon = `<div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 26px; height: 26px;"><i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i></div>`;
+                const icon = `<div class="type-icon type-${device.type}" style="width: 26px; height: 26px;"><i class="fas ${deviceTypeInfo(device.type).typeIcon}"></i></div>`;
 
                 return `
                     <tr>
@@ -3496,6 +3656,8 @@
                 // Фильтр по странице
                 if (currentPage === 'servers' && device.type !== 'server') return false;
                 if (currentPage === 'printers' && device.type !== 'printer') return false;
+                if (currentPage === 'cameras' && device.type !== 'camera') return false;
+                if (currentPage === 'routers' && device.type !== 'router') return false;
                 if (currentPage === 'favorites' && !device.is_favorite) return false;
                 
                 // Поиск
@@ -3784,8 +3946,8 @@
                 return `
                     <tr>
                         <td style="text-align: center;">
-                            <div class="type-icon ${device.type === 'server' ? 'type-server' : 'type-printer'}">
-                                <i class="fas ${device.type === 'server' ? 'fa-server' : 'fa-print'}"></i>
+                            <div class="type-icon type-${device.type}">
+                                <i class="fas ${deviceTypeInfo(device.type).typeIcon}"></i>
                             </div>
                         </td>
                         <td>
@@ -3833,6 +3995,12 @@
                                         <i class="fas fa-external-link-alt"></i>
                                         <span>Веб-интерфейс</span>
                                     </button>
+                                    ${device.type === 'camera' && device.rtsp_url ? `
+                                        <button class="action-btn" onclick="openExternalUrl('${escapeHtml(device.rtsp_url)}')" title="Открыть RTSP поток">
+                                            <i class="fas fa-video"></i>
+                                            <span>RTSP</span>
+                                        </button>
+                                    ` : ''}
                                 `}
                                 <button class="action-btn" onclick="editDevice(${device.id}, '${device.type}')">
                                     <i class="fas fa-edit"></i>
@@ -3988,7 +4156,7 @@
                             <div class="tree-color" style="background: ${group.color}"></div>
                             <div class="tree-name">${escapeHtml(group.name)}</div>
                             <div class="tree-stats">
-                                ${group.servers_count || 0} серверов, ${group.printers_count || 0} принтеров
+                                ${group.servers_count || 0} серверов, ${group.printers_count || 0} принтеров, ${group.cameras_count || 0} камер, ${group.routers_count || 0} роутеров
                             </div>
                             <div class="tree-actions">
                                 <button class="action-btn" data-action="add-subgroup" data-group-id="${group.id}" title="Добавить подгруппу">
@@ -4010,8 +4178,8 @@
                                 <div style="padding: 6px 0 6px 34px;">
                                     ${groupDevices.map(d => `
                                         <div style="display:flex; align-items:center; gap:10px; padding:2px 0;">
-                                            <div class="type-icon ${d.type === 'server' ? 'type-server' : 'type-printer'}" style="width: 24px; height: 24px;">
-                                                <i class="fas ${d.type === 'server' ? 'fa-server' : 'fa-print'}"></i>
+                                            <div class="type-icon type-${d.type}" style="width: 24px; height: 24px;">
+                                                <i class="fas ${deviceTypeInfo(d.type).typeIcon}"></i>
                                             </div>
                                             <div style="flex:1; min-width:0;">
                                                 <div style="display:flex; align-items:center; gap:6px;">
@@ -4313,7 +4481,9 @@
         
         async function loadDeviceData(id, type) {
             try {
-                const endpoint = type === 'server' ? '/api/servers' : '/api/printers';
+                const endpoint = type === 'server' ? '/api/servers'
+                    : type === 'printer' ? '/api/printers'
+                    : type === 'camera' ? '/api/cameras' : '/api/routers';
                 const response = await fetch(endpoint);
                 const data = await response.json();
                 const device = data.find(d => d.id === id);
@@ -4330,9 +4500,24 @@
                         document.getElementById('serverIp').value = device.ip;
                         document.getElementById('serverPort').value = device.port || 5900;
                         document.getElementById('serverRustdeskId').value = device.rustdesk_id || '';
-                    } else {
+                    } else if (type === 'printer') {
                         document.getElementById('printerIp').value = device.ip;
                         document.getElementById('printerInterface').value = device.web_interface || '';
+                    } else if (type === 'camera') {
+                        document.getElementById('cameraIp').value = device.ip;
+                        document.getElementById('cameraPort').value = device.port || 80;
+                        document.getElementById('cameraInterface').value = device.web_interface || '';
+                        document.getElementById('cameraRtspUrl').value = device.rtsp_url || '';
+                        document.getElementById('deviceUsername').value = device.username || '';
+                        document.getElementById('devicePassword').value = '';
+                        document.getElementById('devicePassword').placeholder = device.has_password ? '•••••• (не изменять)' : 'Введите пароль';
+                    } else if (type === 'router') {
+                        document.getElementById('routerIp').value = device.ip;
+                        document.getElementById('routerPort').value = device.port || 80;
+                        document.getElementById('routerInterface').value = device.web_interface || '';
+                        document.getElementById('deviceUsername').value = device.username || '';
+                        document.getElementById('devicePassword').value = '';
+                        document.getElementById('devicePassword').placeholder = device.has_password ? '•••••• (не изменять)' : 'Введите пароль';
                     }
                 }
             } catch (error) {
@@ -4385,7 +4570,7 @@
                         showNotification('Введите IP адрес сервера', 'error');
                         return;
                     }
-                } else {
+                } else if (type === 'printer') {
                     data.ip = document.getElementById('printerIp').value.trim();
                     data.web_interface = document.getElementById('printerInterface').value.trim() || `http://${data.ip}`;
                     
@@ -4393,15 +4578,37 @@
                         showNotification('Введите IP адрес принтера', 'error');
                         return;
                     }
+                } else {
+                    const ipField = type === 'camera' ? 'cameraIp' : 'routerIp';
+                    const portField = type === 'camera' ? 'cameraPort' : 'routerPort';
+                    const ifaceField = type === 'camera' ? 'cameraInterface' : 'routerInterface';
+                    data.ip = document.getElementById(ipField).value.trim();
+                    data.port = parseInt(document.getElementById(portField).value) || 80;
+                    data.web_interface = document.getElementById(ifaceField).value.trim() || `http://${data.ip}`;
+                    data.username = document.getElementById('deviceUsername').value.trim();
+                    const pass = document.getElementById('devicePassword').value;
+                    if (pass) data.password = pass;
+                    
+                    if (type === 'camera') {
+                        data.rtsp_url = document.getElementById('cameraRtspUrl').value.trim();
+                    }
+                    
+                    if (!data.ip) {
+                        showNotification(`Введите IP адрес ${type === 'camera' ? 'камеры' : 'роутера'}`, 'error');
+                        return;
+                    }
                 }
                 
                 let endpoint, method;
+                const apiPath = type === 'server' ? 'servers'
+                    : type === 'printer' ? 'printers'
+                    : type === 'camera' ? 'cameras' : 'routers';
                 
                 if (editingDeviceId && editingDeviceType === type) {
-                    endpoint = `/api/${type === 'server' ? 'servers' : 'printers'}/${editingDeviceId}`;
+                    endpoint = `/api/${apiPath}/${editingDeviceId}`;
                     method = 'PUT';
                 } else {
-                    endpoint = `/api/${type === 'server' ? 'servers' : 'printers'}`;
+                    endpoint = `/api/${apiPath}`;
                     method = 'POST';
                 }
                 
@@ -4993,6 +5200,14 @@
                 return;
             }
             
+            window.open(url, '_blank');
+        }
+
+        function openExternalUrl(url) {
+            if (!url) {
+                showNotification('Ссылка не указана', 'error');
+                return;
+            }
             window.open(url, '_blank');
         }
 
@@ -5597,7 +5812,8 @@
         }
         
         async function deleteDevice(id, type) {
-            if (!confirm(`Удалить этот ${type === 'server' ? 'сервер' : 'принтер'}?`)) return;
+            const typeNames = { server: 'сервер', printer: 'принтер', camera: 'камеру', router: 'роутер' };
+            if (!confirm(`Удалить ${typeNames[type] || 'устройство'}?`)) return;
             
             try {
                 // Немедленно обновляем интерфейс
@@ -5605,7 +5821,10 @@
                 showNotification('Устройство удалено', 'success');
                 
                 // Отправляем запрос на сервер в фоне
-                const endpoint = type === 'server' ? '/api/servers' : '/api/printers';
+                const apiPath = type === 'server' ? 'servers'
+                    : type === 'printer' ? 'printers'
+                    : type === 'camera' ? 'cameras' : 'routers';
+                const endpoint = `/api/${apiPath}`;
                 const response = await fetch(`${endpoint}/${id}`, {
                     method: 'DELETE'
                 });
@@ -5697,6 +5916,8 @@
                 if (exportServers) exportData.servers = allData.servers;
                 if (exportPrinters) exportData.printers = allData.printers;
                 if (exportGroups) exportData.groups = allData.groups;
+                exportData.cameras = allData.cameras || [];
+                exportData.routers = allData.routers || [];
                 
                 let data, filename, mimeType;
                 
@@ -5735,6 +5956,43 @@
                                 printer.web_interface || '',
                                 printer.status,
                                 `"${printer.comment || ''}"`
+                            ].join(','));
+                        });
+                        csvLines.push('');
+                    }
+
+                    if (exportData.cameras && exportData.cameras.length) {
+                        csvLines.push('=== CAMERAS ===');
+                        csvLines.push('Name,IP,Port,Group,Web Interface,RTSP,Username,Status,Comment');
+                        exportData.cameras.forEach(cam => {
+                            csvLines.push([
+                                `"${cam.name}"`,
+                                cam.ip,
+                                cam.port,
+                                cam.group_name || '',
+                                cam.web_interface || '',
+                                cam.rtsp_url || '',
+                                cam.username || '',
+                                cam.status,
+                                `"${cam.comment || ''}"`
+                            ].join(','));
+                        });
+                        csvLines.push('');
+                    }
+
+                    if (exportData.routers && exportData.routers.length) {
+                        csvLines.push('=== ROUTERS ===');
+                        csvLines.push('Name,IP,Port,Group,Web Interface,Username,Status,Comment');
+                        exportData.routers.forEach(r => {
+                            csvLines.push([
+                                `"${r.name}"`,
+                                r.ip,
+                                r.port,
+                                r.group_name || '',
+                                r.web_interface || '',
+                                r.username || '',
+                                r.status,
+                                `"${r.comment || ''}"`
                             ].join(','));
                         });
                         csvLines.push('');

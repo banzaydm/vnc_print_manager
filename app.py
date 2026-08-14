@@ -16,7 +16,7 @@ import concurrent.futures
 import requests
 from markupsafe import escape
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import db, Group, Server, Printer, Settings, SubnetName, User, utcnow
+from models import db, Group, Server, Printer, Camera, Router, Settings, SubnetName, User, utcnow
 from sqlalchemy import text
 
 app = Flask(__name__, static_folder='.', static_url_path='')
@@ -165,7 +165,7 @@ def get_printer_status_cached(ip):
     return online
 
 
-def _fetch_statuses_parallel(items, is_printer=False):
+def _fetch_statuses_parallel(items, is_printer=False, is_web=False):
     """Параллельно проверяет статусы устройств, возвращает {id: bool}.
 
     Отдельные ошибки проб не роняют общий запрос — такие устройства
@@ -178,6 +178,8 @@ def _fetch_statuses_parallel(items, is_printer=False):
     def probe(item):
         if is_printer:
             return item.id, get_printer_status_cached(item.ip)
+        if is_web:
+            return item.id, get_web_device_status_cached(item.ip, item.port)
         return item.id, get_server_status_cached(item.ip, item.port)
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(items))) as executor:
@@ -459,6 +461,39 @@ def check_printer_status(ip):
     except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
         pass
     return _tcp_probe_printer(ip)
+
+def check_web_device_status(ip, port):
+    """Проверка статуса веб-устройства (камеры/роутеры): ping + TCP fallback"""
+    try:
+        if platform.system() == 'Windows':
+            cmd = ['ping', '-n', '1', '-w', '1000', ip]
+        else:
+            cmd = ['ping', '-c', '1', '-W', '1', ip]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+        if result.returncode == 0:
+            return True
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        pass
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(1.5)
+        r = sock.connect_ex((ip, int(port or 80)))
+        sock.close()
+        return r == 0
+    except OSError:
+        return False
+
+def get_web_device_status_cached(ip, port):
+    key = ('web', ip, int(port or 80))
+    now = time.time()
+    with _status_cache_lock:
+        cached = _status_cache.get(key)
+        if cached and cached[1] > now:
+            return cached[0]
+    online = check_web_device_status(ip, port)
+    with _status_cache_lock:
+        _status_cache[key] = (online, now + STATUS_CACHE_TTL)
+    return online
 
 def find_vnc_client():
     """Поиск VNC клиента на текущей платформе"""
@@ -763,7 +798,9 @@ def groups_api():
                 'color': group.color,
                 'parent_id': group.parent_id,
                 'servers_count': Server.query.filter_by(group_id=group.id).count(),
-                'printers_count': Printer.query.filter_by(group_id=group.id).count()
+                'printers_count': Printer.query.filter_by(group_id=group.id).count(),
+                'cameras_count': Camera.query.filter_by(group_id=group.id).count(),
+                'routers_count': Router.query.filter_by(group_id=group.id).count()
             }
             result.append(group_dict)
         return jsonify(result)
@@ -803,6 +840,8 @@ def delete_group(group_id):
     # Удаляем связи с устройствами
     Server.query.filter_by(group_id=group_id).update({'group_id': None})
     Printer.query.filter_by(group_id=group_id).update({'group_id': None})
+    Camera.query.filter_by(group_id=group_id).update({'group_id': None})
+    Router.query.filter_by(group_id=group_id).update({'group_id': None})
     
     db.session.delete(group)
     db.session.commit()
@@ -988,6 +1027,154 @@ def printer_api(printer_id):
         db.session.delete(printer)
         db.session.commit()
         return jsonify({'success': True})
+
+def _web_device_dict(device, status):
+    d = {
+        'id': device.id,
+        'name': device.name,
+        'ip': device.ip,
+        'port': device.port,
+        'group_id': device.group_id,
+        'web_interface': device.web_interface,
+        'username': device.username,
+        'password': '******' if device.password else '',
+        'has_password': bool(device.password),
+        'is_favorite': bool(getattr(device, 'is_favorite', False)),
+        'status': 'online' if status else 'offline',
+        'comment': device.comment,
+        'created_at': device.created_at.isoformat() if device.created_at else None
+    }
+    if hasattr(device, 'rtsp_url'):
+        d['rtsp_url'] = device.rtsp_url or ''
+    if device.group:
+        d['group_name'] = device.group.name
+        d['group_color'] = device.group.color
+    return d
+
+def _apply_password(device, data):
+    """Сохраняет пароль, если прислано реальное значение (не маска и не пусто)."""
+    pw = data.get('password')
+    if isinstance(pw, str) and pw and pw != '******':
+        device.password = pw
+    elif isinstance(pw, str) and pw == '' and data.get('clear_password'):
+        device.password = ''
+
+@app.route('/api/cameras', methods=['GET', 'POST'])
+def cameras_api():
+    if request.method == 'GET':
+        cameras = Camera.query.order_by(Camera.name).all()
+        statuses = _fetch_statuses_parallel(cameras, is_web=True)
+        return jsonify([_web_device_dict(c, statuses.get(c.id)) for c in cameras])
+
+    data = get_json()
+    if not data.get('name') or not data.get('ip'):
+        return jsonify({'error': 'Укажите название и IP'}), 400
+    if Camera.query.filter_by(ip=data['ip']).first():
+        return jsonify({'error': 'IP адрес уже существует'}), 400
+
+    camera = Camera(
+        name=data['name'],
+        ip=data['ip'],
+        port=_normalize_port(data.get('port'), 80) or 80,
+        group_id=data.get('group_id'),
+        web_interface=data.get('web_interface', f"http://{data['ip']}"),
+        rtsp_url=data.get('rtsp_url', ''),
+        username=data.get('username', ''),
+        password=data.get('password', ''),
+        comment=data.get('comment', ''),
+        is_favorite=bool(data.get('is_favorite', False))
+    )
+    db.session.add(camera)
+    db.session.commit()
+    return jsonify({'success': True, 'id': camera.id})
+
+@app.route('/api/cameras/<int:camera_id>', methods=['PUT', 'DELETE'])
+def camera_api(camera_id):
+    camera = Camera.query.get(camera_id)
+    if not camera:
+        return jsonify({'error': 'Камера не найдена'}), 404
+
+    if request.method == 'PUT':
+        data = get_json()
+        if 'ip' in data and data['ip'] != camera.ip:
+            if Camera.query.filter_by(ip=data['ip']).first():
+                return jsonify({'error': 'IP адрес уже существует'}), 400
+        for field in ('name', 'ip', 'web_interface', 'rtsp_url', 'username', 'comment'):
+            if field in data:
+                setattr(camera, field, data[field])
+        if 'port' in data:
+            port = _normalize_port(data.get('port'), 80)
+            if port:
+                camera.port = port
+        if 'group_id' in data:
+            camera.group_id = data['group_id']
+        if 'is_favorite' in data:
+            camera.is_favorite = bool(data['is_favorite'])
+        _apply_password(camera, data)
+        db.session.commit()
+        return jsonify({'success': True})
+
+    db.session.delete(camera)
+    db.session.commit()
+    return jsonify({'success': True})
+
+@app.route('/api/routers', methods=['GET', 'POST'])
+def routers_api():
+    if request.method == 'GET':
+        routers = Router.query.order_by(Router.name).all()
+        statuses = _fetch_statuses_parallel(routers, is_web=True)
+        return jsonify([_web_device_dict(r, statuses.get(r.id)) for r in routers])
+
+    data = get_json()
+    if not data.get('name') or not data.get('ip'):
+        return jsonify({'error': 'Укажите название и IP'}), 400
+    if Router.query.filter_by(ip=data['ip']).first():
+        return jsonify({'error': 'IP адрес уже существует'}), 400
+
+    router = Router(
+        name=data['name'],
+        ip=data['ip'],
+        port=_normalize_port(data.get('port'), 80) or 80,
+        group_id=data.get('group_id'),
+        web_interface=data.get('web_interface', f"http://{data['ip']}"),
+        username=data.get('username', ''),
+        password=data.get('password', ''),
+        comment=data.get('comment', ''),
+        is_favorite=bool(data.get('is_favorite', False))
+    )
+    db.session.add(router)
+    db.session.commit()
+    return jsonify({'success': True, 'id': router.id})
+
+@app.route('/api/routers/<int:router_id>', methods=['PUT', 'DELETE'])
+def router_api(router_id):
+    router = Router.query.get(router_id)
+    if not router:
+        return jsonify({'error': 'Роутер не найден'}), 404
+
+    if request.method == 'PUT':
+        data = get_json()
+        if 'ip' in data and data['ip'] != router.ip:
+            if Router.query.filter_by(ip=data['ip']).first():
+                return jsonify({'error': 'IP адрес уже существует'}), 400
+        for field in ('name', 'ip', 'web_interface', 'username', 'comment'):
+            if field in data:
+                setattr(router, field, data[field])
+        if 'port' in data:
+            port = _normalize_port(data.get('port'), 80)
+            if port:
+                router.port = port
+        if 'group_id' in data:
+            router.group_id = data['group_id']
+        if 'is_favorite' in data:
+            router.is_favorite = bool(data['is_favorite'])
+        _apply_password(router, data)
+        db.session.commit()
+        return jsonify({'success': True})
+
+    db.session.delete(router)
+    db.session.commit()
+    return jsonify({'success': True})
 
 @app.route('/api/connect/<int:server_id>', methods=['POST'])
 def connect_vnc(server_id):
@@ -1288,6 +1475,19 @@ def scan_network():
                         found_devices.append(device_data)
                         app.logger.info(f'Найден принтер: {ip}:{port} - {display_name}')
             
+            # Ищем камеры и роутеры (если на IP не найден принтер)
+            if not any(d['type'] == 'printer' for d in found_devices):
+                hostname = get_hostname(ip)
+                cam = detect_camera(ip, hostname)
+                if cam:
+                    found_devices.append(cam)
+                    app.logger.info(f'Найдена камера: {ip} - {cam.get("name")}')
+                else:
+                    router = detect_router(ip, hostname)
+                    if router:
+                        found_devices.append(router)
+                        app.logger.info(f'Найден роутер: {ip} - {router.get("name")}')
+
             if found_devices:
                 app.logger.debug(f'IP {ip}: найдено {len(found_devices)} устройств')
             else:
@@ -1319,17 +1519,24 @@ def scan_network():
             app.logger.error(f'Ошибка ping для {ip}: {e}')
             return False
     
+    open_cache = {}
+
     def check_port(ip, port):
-        """Проверка открытого порта"""
+        """Проверка открытого порта (с кэшем)"""
+        key = (ip, int(port))
+        if key in open_cache:
+            return open_cache[key]
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.settimeout(2)
             result = sock.connect_ex((ip, port))
             sock.close()
+            open_cache[key] = result == 0
             app.logger.debug(f'Проверка порта {ip}:{port} - {"открыт" if result == 0 else "закрыт"}')
-            return result == 0
+            return open_cache[key]
         except Exception as e:
             app.logger.debug(f'Ошибка проверки порта {ip}:{port}: {e}')
+            open_cache[key] = False
             return False
     
     def is_likely_printer(ip, port):
@@ -1371,7 +1578,236 @@ def scan_network():
         except Exception as e:
             app.logger.debug(f'Ошибка проверки принтера {ip}:{port}: {e}')
             return False
-    
+
+    web_probe_cache = {}
+
+    def get_web(ip, port):
+        """HTTP(S) GET: возвращает (headers_lower, content_lower, status) с кэшем."""
+        key = (ip, int(port))
+        if key in web_probe_cache:
+            return web_probe_cache[key]
+        result = (None, None, None)
+        try:
+            import urllib.request
+            import urllib.error
+            scheme = 'https' if port == 443 else 'http'
+            req = urllib.request.Request(f'{scheme}://{ip}:{port}/', method='GET', headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=4) as response:
+                raw = response.read(20000)
+                try:
+                    content = raw.decode('utf-8', errors='ignore').lower()
+                except Exception:
+                    content = ''
+                headers = {k.lower(): (v or '').lower() for k, v in response.headers.items()}
+                result = (headers, content, response.status)
+        except urllib.error.HTTPError as e:
+            result = ({'status': 'HTTP', 'server': ''}, str(e.code), e.code)
+        except Exception as e:
+            app.logger.debug(f'get_web {ip}:{port} failed: {e}')
+        web_probe_cache[key] = result
+        return result
+
+    def banner_grab(ip, port, read=True):
+        """Чтение TCP-баннера с порта."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2.5)
+            sock.connect((ip, port))
+            if read:
+                data = sock.recv(1024)
+                sock.close()
+                return data.decode('utf-8', errors='ignore')
+            sock.close()
+            return ''
+        except Exception:
+            return ''
+
+    def rtsp_probe(ip, port=554):
+        """Проверка RTSP-сервера: отправка OPTIONS, возврат ответа."""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2.5)
+            sock.connect((ip, port))
+            sock.send(f'OPTIONS rtsp://{ip}:{port}/ RTSP/1.0\r\nCSeq: 1\r\n\r\n'.encode())
+            data = sock.recv(4096).decode('utf-8', errors='ignore')
+            sock.close()
+            return data if 'RTSP/1.0' in data else ''
+        except Exception:
+            return ''
+
+    CAMERA_KEYWORDS = [
+        'hikvision', 'dahua', 'dvr', 'nvr', 'ipcam', 'ip camera', 'webcam',
+        'onvif', 'rtsp', 'reolink', 'amcrest', 'axis', 'xiaomi', 'smartvision',
+        'ezviz', 'uniview', 'sunell', 'tp-camera', 'netvue', 'camera', 'wisenet', 'samsung-camera'
+    ]
+    CAMERA_SERVER_HEADERS = ['dvrds-webs', 'ipcamera', 'hikvision', 'dahua', 'webcam']
+
+    ROUTER_KEYWORDS = [
+        'mikrotik', 'routeros', 'winbox', 'tp-link', 'tplink', 'd-link', 'dlink',
+        'asus', 'keenetic', 'zyxel', 'unifi', 'ubiquiti', 'cisco', 'openwrt', 'luci',
+        'pfsense', 'routers', 'netgear', 'huawei', 'juniper', 'fortinet', 'draytek',
+        'fritz', 'totolink', 'mikrotik router', 'zywall', 'vodafone', 'linksys'
+    ]
+
+    def _web_scores(headers, content):
+        cam_score = 0
+        router_score = 0
+        text = (content or '')
+        server = (headers or {}).get('server', '')
+        for kw in CAMERA_KEYWORDS:
+            if kw in server or kw in text:
+                cam_score += 1
+        for h in CAMERA_SERVER_HEADERS:
+            if h in server:
+                cam_score += 2
+        for kw in ROUTER_KEYWORDS:
+            if kw in server or kw in text:
+                router_score += 1
+        return cam_score, router_score
+
+    def _camera_from_web(ip, hostname, port, web):
+        headers, content, _ = web
+        cam_score, router_score = _web_scores(headers, content)
+        if cam_score > router_score and cam_score > 0:
+            name = hostname
+            for marker in ('hikvision', 'dahua', 'reolink', 'amcrest', 'axis', 'uniview', 'wisenet', 'ezviz'):
+                idx = content.find(marker)
+                if idx != -1:
+                    snippet = content[max(0, idx - 40):idx + 60].split('<')[0].strip()
+                    if snippet:
+                        name = snippet if len(snippet) < 60 else snippet[:60]
+                        break
+            return {
+                'type': 'camera',
+                'ip': ip,
+                'port': port,
+                'name': name,
+                'status': 'online',
+                'web_interface': f'http{"s" if port == 443 else ""}://{ip}:{port}'
+            }
+        return None
+
+    def detect_camera(ip, hostname):
+        """Поиск камеры видеонаблюдения по RTSP/HTTP/ONVIF/SDK/MJPEG."""
+        result = None
+
+        rtsp_data = rtsp_probe(ip) if check_port(ip, 554) else ''
+        if rtsp_data:
+            name = hostname
+            server_line = [ln for ln in rtsp_data.splitlines() if ln.lower().startswith('server:')]
+            if server_line:
+                model = server_line[0].split(':', 1)[1].strip()
+                if model:
+                    name = model if len(model) < 60 else model[:60]
+            result = {
+                'type': 'camera',
+                'ip': ip,
+                'port': 554,
+                'name': name,
+                'status': 'online',
+                'rtsp_url': f'rtsp://{ip}:554/',
+                'web_interface': ''
+            }
+            return result
+
+        for port in (80, 443, 8080):
+            if check_port(ip, port):
+                web = get_web(ip, port)
+                cam = _camera_from_web(ip, hostname, port, web)
+                if cam:
+                    return cam
+
+        if check_port(ip, 8000):  # Hikvision SDK / IPC
+            b = banner_grab(ip, 8000)
+            if 'hikvision' in b.lower() or 'ipc' in b.lower():
+                return {'type': 'camera', 'ip': ip, 'port': 8000, 'name': 'Hikvision IPC', 'status': 'online', 'rtsp_url': f'rtsp://{ip}:554/', 'web_interface': ''}
+            if b:
+                return {'type': 'camera', 'ip': ip, 'port': 8000, 'name': hostname, 'status': 'online', 'web_interface': ''}
+
+        if check_port(ip, 37777):  # Dahua SDK
+            b = banner_grab(ip, 37777)
+            if b:
+                return {'type': 'camera', 'ip': ip, 'port': 37777, 'name': hostname, 'status': 'online', 'web_interface': ''}
+
+        return result
+
+    def _router_from_web(ip, hostname, port, web):
+        headers, content, _ = web
+        cam_score, router_score = _web_scores(headers, content)
+        if router_score > 0 and router_score >= cam_score:
+            name = hostname
+            for marker in ('mikrotik', 'routeros', 'tp-link', 'd-link', 'keenetic', 'unifi', 'openwrt', 'asus', 'cisco'):
+                idx = content.find(marker)
+                if idx != -1:
+                    snippet = content[max(0, idx - 30):idx + 50].split('<')[0].strip()
+                    if snippet:
+                        name = snippet if len(snippet) < 60 else snippet[:60]
+                        break
+            return {
+                'type': 'router',
+                'ip': ip,
+                'port': port,
+                'name': name,
+                'status': 'online',
+                'web_interface': f'http{"s" if port == 443 else ""}://{ip}:{port}'
+            }
+        return None
+
+    def detect_router(ip, hostname):
+        """Поиск роутера/сетевого оборудования по веб/SSH/Telnet/SNMP/UPnP/TR-069."""
+        for port in (80, 443, 8080, 8443):
+            if check_port(ip, port):
+                web = get_web(ip, port)
+                router = _router_from_web(ip, hostname, port, web)
+                if router:
+                    return router
+
+        if check_port(ip, 22):
+            banner = banner_grab(ip, 22)
+            if banner and 'SSH-2.0' in banner:
+                name = hostname
+                if 'openwrt' in banner.lower() or 'dropbear' in banner.lower() or 'routeros' in banner.lower():
+                    name = banner.split('\r\n')[0].strip()
+                return {'type': 'router', 'ip': ip, 'port': 22, 'name': name, 'status': 'online', 'web_interface': ''}
+
+        if check_port(ip, 23):
+            banner = banner_grab(ip, 23)
+            if banner and any(k in banner.lower() for k in ('cisco', 'routeros', 'telnet', 'dlink', 'huawei', 'zyxel')):
+                return {'type': 'router', 'ip': ip, 'port': 23, 'name': banner.split('\r\n')[0].strip() or hostname, 'status': 'online', 'web_interface': ''}
+
+        if check_port(ip, 7547):  # TR-069
+            return {'type': 'router', 'ip': ip, 'port': 7547, 'name': hostname, 'status': 'online', 'web_interface': ''}
+
+        try:
+            import subprocess
+            r = subprocess.run(
+                ['snmpget', '-v2c', '-c', 'public', '-t', '1', '-r', '0', ip, '1.3.6.1.2.1.1.1.0'],
+                capture_output=True, text=True, timeout=3
+            )
+            if r.returncode == 0 and ('STRING' in r.stdout or 'OID' in r.stdout):
+                desc = r.stdout.strip()
+                if any(k in desc.lower() for k in ('cisco', 'mikrotik', 'routeros', 'huawei', 'zyxel', 'router', 'd-link', 'tp-link', 'dlink', 'switch')):
+                    return {'type': 'router', 'ip': ip, 'port': 161, 'name': desc[:60], 'status': 'online', 'web_interface': ''}
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+            pass
+
+        try:
+            import socket as _s
+            msg = ('M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\n'
+                   'MAN: "ssdp:discover"\r\nMX: 1\r\nST: urn:schemas-upnp-org:device:InternetGatewayDevice:1\r\n\r\n').encode()
+            s = _s.socket(_s.AF_INET, _s.SOCK_DGRAM)
+            s.settimeout(2)
+            s.sendto(msg, (ip, 1900))
+            data, _ = s.recvfrom(2048)
+            s.close()
+            resp = data.decode('utf-8', errors='ignore').lower()
+            if 'internetgatewaydevice' in resp or 'location:' in resp:
+                return {'type': 'router', 'ip': ip, 'port': 1900, 'name': hostname, 'status': 'online', 'web_interface': ''}
+        except Exception:
+            pass
+
+        return None
+
     # Параллельная проверка IP адресов
     checked_count = 0
     responsive_count = 0
@@ -1409,6 +1845,10 @@ def toggle_favorite(device_type, device_id):
         device = Server.query.get(device_id)
     elif device_type == 'printer':
         device = Printer.query.get(device_id)
+    elif device_type == 'camera':
+        device = Camera.query.get(device_id)
+    elif device_type == 'router':
+        device = Router.query.get(device_id)
     else:
         return jsonify({'error': 'Неверный тип устройства'}), 400
 
@@ -1434,17 +1874,25 @@ def clear_db():
     try:
         clear_servers = bool(data.get('clear_servers', True))
         clear_printers = bool(data.get('clear_printers', True))
+        clear_cameras = bool(data.get('clear_cameras', True))
+        clear_routers = bool(data.get('clear_routers', True))
         clear_groups = bool(data.get('clear_groups', True))
 
         if clear_groups:
             # Если удаляем группы, сначала отвязываем устройства, чтобы не было проблем с FK.
             Server.query.update({'group_id': None}, synchronize_session=False)
             Printer.query.update({'group_id': None}, synchronize_session=False)
+            Camera.query.update({'group_id': None}, synchronize_session=False)
+            Router.query.update({'group_id': None}, synchronize_session=False)
 
         if clear_servers:
             Server.query.delete(synchronize_session=False)
         if clear_printers:
             Printer.query.delete(synchronize_session=False)
+        if clear_cameras:
+            Camera.query.delete(synchronize_session=False)
+        if clear_routers:
+            Router.query.delete(synchronize_session=False)
         if clear_groups:
             # У групп есть иерархия (parent_id). Перед удалением разрываем связи,
             # иначе SQLite может ругаться на FK при массовом delete.
@@ -2275,9 +2723,13 @@ def export_data():
         groups = Group.query.all()
         servers = Server.query.all()
         printers = Printer.query.all()
+        cameras = Camera.query.all()
+        routers = Router.query.all()
 
         server_statuses = _fetch_statuses_parallel(servers)
         printer_statuses = _fetch_statuses_parallel(printers, is_printer=True)
+        camera_statuses = _fetch_statuses_parallel(cameras, is_web=True)
+        router_statuses = _fetch_statuses_parallel(routers, is_web=True)
 
         groups_data = []
         for group in groups:
@@ -2317,17 +2769,54 @@ def export_data():
                 'created_at': printer.created_at.isoformat() if printer.created_at else None
             })
         
+        cameras_data = []
+        for camera in cameras:
+            cameras_data.append({
+                'id': camera.id,
+                'name': camera.name,
+                'ip': camera.ip,
+                'port': camera.port,
+                'group_id': camera.group_id,
+                'web_interface': camera.web_interface,
+                'rtsp_url': camera.rtsp_url,
+                'username': camera.username,
+                'is_favorite': bool(getattr(camera, 'is_favorite', False)),
+                'status': 'online' if camera_statuses.get(camera.id) else 'offline',
+                'comment': camera.comment,
+                'created_at': camera.created_at.isoformat() if camera.created_at else None
+            })
+
+        routers_data = []
+        for router in routers:
+            routers_data.append({
+                'id': router.id,
+                'name': router.name,
+                'ip': router.ip,
+                'port': router.port,
+                'group_id': router.group_id,
+                'web_interface': router.web_interface,
+                'username': router.username,
+                'is_favorite': bool(getattr(router, 'is_favorite', False)),
+                'status': 'online' if router_statuses.get(router.id) else 'offline',
+                'comment': router.comment,
+                'created_at': router.created_at.isoformat() if router.created_at else None
+            })
+
         export_data = {
             'metadata': {
                 'exported_at': datetime.now().isoformat(),
                 'version': '2.0',
                 'total_servers': len(servers_data),
                 'total_printers': len(printers_data),
+                'total_cameras': len(cameras_data),
+                'total_routers': len(routers_data),
                 'total_groups': len(groups_data)
             },
             'groups': groups_data,
             'servers': servers_data,
-            'printers': printers_data
+            'printers': printers_data,
+            'cameras': cameras_data,
+            'routers': routers_data
         }
         
         return jsonify(export_data)
@@ -2338,18 +2827,22 @@ def export_data():
 
 def _backup_to_import_payload(backup_data):
     """Преобразует формат файла бэкапа в формат импорта."""
-    if backup_data.get('servers') or backup_data.get('printers'):
+    if backup_data.get('servers') or backup_data.get('printers') or backup_data.get('cameras') or backup_data.get('routers'):
         return {
             'mode': 'overwrite',
             'groups': backup_data.get('groups', []),
             'servers': backup_data.get('servers', []),
             'printers': backup_data.get('printers', []),
+            'cameras': backup_data.get('cameras', []),
+            'routers': backup_data.get('routers', []),
             'subnet_names': backup_data.get('subnetNames', []),
             'settings': backup_data.get('settings', {}),
         }
 
     servers = []
     printers = []
+    cameras = []
+    routers = []
     for device in backup_data.get('devices', []):
         if device.get('type') == 'server':
             servers.append({
@@ -2369,12 +2862,35 @@ def _backup_to_import_payload(backup_data):
                 'is_favorite': device.get('is_favorite', False),
                 'comment': device.get('comment', ''),
             })
+        elif device.get('type') == 'camera':
+            cameras.append({
+                'name': device.get('name'),
+                'ip': device.get('ip'),
+                'port': device.get('port', 80),
+                'group_id': device.get('group_id'),
+                'web_interface': device.get('web_interface', f"http://{device.get('ip', '')}"),
+                'rtsp_url': device.get('rtsp_url', ''),
+                'is_favorite': device.get('is_favorite', False),
+                'comment': device.get('comment', ''),
+            })
+        elif device.get('type') == 'router':
+            routers.append({
+                'name': device.get('name'),
+                'ip': device.get('ip'),
+                'port': device.get('port', 80),
+                'group_id': device.get('group_id'),
+                'web_interface': device.get('web_interface', f"http://{device.get('ip', '')}"),
+                'is_favorite': device.get('is_favorite', False),
+                'comment': device.get('comment', ''),
+            })
 
     return {
         'mode': 'overwrite',
         'groups': backup_data.get('groups', []),
         'servers': servers,
         'printers': printers,
+        'cameras': cameras,
+        'routers': routers,
         'subnet_names': backup_data.get('subnetNames', []),
         'settings': backup_data.get('settings', {}),
     }
@@ -2389,9 +2905,13 @@ def import_data_core(data):
     if mode == 'overwrite':
         Server.query.update({'group_id': None}, synchronize_session=False)
         Printer.query.update({'group_id': None}, synchronize_session=False)
+        Camera.query.update({'group_id': None}, synchronize_session=False)
+        Router.query.update({'group_id': None}, synchronize_session=False)
         Group.query.update({'parent_id': None}, synchronize_session=False)
         Server.query.delete(synchronize_session=False)
         Printer.query.delete(synchronize_session=False)
+        Camera.query.delete(synchronize_session=False)
+        Router.query.delete(synchronize_session=False)
         Group.query.delete(synchronize_session=False)
         db.session.commit()
 
@@ -2467,6 +2987,64 @@ def import_data_core(data):
                 web_interface=printer_data.get('web_interface', f"http://{printer_data['ip']}"),
                 is_favorite=printer_data.get('is_favorite', False),
                 comment=printer_data.get('comment', ''),
+            ))
+
+    cameras_data = data.get('cameras', [])
+    for camera_data in cameras_data:
+        if not camera_data.get('ip') or not camera_data.get('name'):
+            continue
+        group_id = group_map.get(camera_data.get('group_id')) if camera_data.get('group_id') else None
+
+        existing = Camera.query.filter_by(ip=camera_data['ip']).first()
+        if existing:
+            existing.name = camera_data['name']
+            existing.port = camera_data.get('port', 80)
+            existing.group_id = group_id
+            existing.web_interface = camera_data.get('web_interface', f"http://{camera_data['ip']}")
+            existing.rtsp_url = camera_data.get('rtsp_url', '')
+            if camera_data.get('username'):
+                existing.username = camera_data['username']
+            existing.is_favorite = camera_data.get('is_favorite', False)
+            existing.comment = camera_data.get('comment', '')
+        else:
+            db.session.add(Camera(
+                name=camera_data['name'],
+                ip=camera_data['ip'],
+                port=camera_data.get('port', 80),
+                group_id=group_id,
+                web_interface=camera_data.get('web_interface', f"http://{camera_data['ip']}"),
+                rtsp_url=camera_data.get('rtsp_url', ''),
+                username=camera_data.get('username', ''),
+                is_favorite=camera_data.get('is_favorite', False),
+                comment=camera_data.get('comment', ''),
+            ))
+
+    routers_data = data.get('routers', [])
+    for router_data in routers_data:
+        if not router_data.get('ip') or not router_data.get('name'):
+            continue
+        group_id = group_map.get(router_data.get('group_id')) if router_data.get('group_id') else None
+
+        existing = Router.query.filter_by(ip=router_data['ip']).first()
+        if existing:
+            existing.name = router_data['name']
+            existing.port = router_data.get('port', 80)
+            existing.group_id = group_id
+            existing.web_interface = router_data.get('web_interface', f"http://{router_data['ip']}")
+            if router_data.get('username'):
+                existing.username = router_data['username']
+            existing.is_favorite = router_data.get('is_favorite', False)
+            existing.comment = router_data.get('comment', '')
+        else:
+            db.session.add(Router(
+                name=router_data['name'],
+                ip=router_data['ip'],
+                port=router_data.get('port', 80),
+                group_id=group_id,
+                web_interface=router_data.get('web_interface', f"http://{router_data['ip']}"),
+                username=router_data.get('username', ''),
+                is_favorite=router_data.get('is_favorite', False),
+                comment=router_data.get('comment', ''),
             ))
 
     subnet_names = data.get('subnet_names', [])
