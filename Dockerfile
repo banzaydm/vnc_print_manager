@@ -3,9 +3,12 @@ FROM python:3.11-slim
 # Устанавливаем рабочую директорию
 WORKDIR /app
 
-# Копируем файлы зависимостей и устанавливаем их
+# Копируем файлы зависимостей и устанавливаем их.
+# Индекс PyPI настраивается через --build-arg PIP_INDEX_URL (например,
+# --build-arg PIP_INDEX_URL=https://pypi.org/simple), чтобы обойти блокировки pypi.org.
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout 60 --retries 5 -r requirements.txt -i $PIP_INDEX_URL
 
 # FFmpeg для перекодировки RTSP в HLS (просмотр камер в браузере)
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
