@@ -11,12 +11,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --timeout 60 --retries 5 -r requirements.txt -i $PIP_INDEX_URL
 
 # FFmpeg для перекодировки RTSP в HLS (просмотр камер в браузере).
-# Зеркало APT настраивается через --build-arg APT_MIRROR (например,
-# --build-arg APT_MIRROR=https://deb.debian.org/debian), чтобы обойти
-# недоступность официальных репозиториев Debian.
-ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
-RUN sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null; \
-    sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g" /etc/apt/sources.list 2>/dev/null; \
+# Зеркало APT задаётся ХОСТОМ через --build-arg APT_MIRROR (например,
+# --build-arg APT_MIRROR=deb.debian.org) — пути /debian и /debian-security
+# сохраняются. По умолчанию — зеркало Tsinghua (обходит блокировку deb.debian.org).
+ARG APT_MIRROR=mirrors.tuna.tsinghua.edu.cn
+RUN sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null; \
+    sed -i "s|deb.debian.org|$APT_MIRROR|g; s|security.debian.org|$APT_MIRROR|g" /etc/apt/sources.list 2>/dev/null; \
+    echo "APT_MIRROR=$APT_MIRROR"; \
     apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
 # Копируем все файлы приложения
