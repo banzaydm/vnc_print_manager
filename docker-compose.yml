@@ -1,9 +1,6 @@
-version: '3.8'
-
 services:
   vnc-print-manager:
     build: .
-    image: vnc-print-manager:local
     ports:
       - "5000:5000"  # Веб-интерфейс
       - "6080:6080"  # noVNC WebSocket прокси (websockify запускается внутри контейнера)
