@@ -2290,6 +2290,17 @@ def novnc_page(server_id):
       width: auto !important;
       height: auto !important;
     }}
+    /* При вложенных VNC-сессиях сервер может не передавать изображение курсора,
+       и noVNC прячет системный курсор (cursor: none) — курсор становится невидим.
+       По умолчанию показываем системный курсор браузера; режим "серверный" курсор
+       (body.server-cursor) возвращает стандартное поведение noVNC. */
+    body:not(.server-cursor) #screen canvas {{
+      cursor: default !important;
+    }}
+    .cursor-toggle {{
+      position: fixed; top: 46px; right: 10px; z-index: 50;
+      font-size: 11px; height: auto; padding: 4px 8px;
+    }}
     .pw-overlay {{
       position: fixed; inset: 0; background: rgba(0,0,0,.55);
       display: none; align-items: center; justify-content: center; z-index: 100;
@@ -2334,6 +2345,7 @@ def novnc_page(server_id):
   <div class="wrap">
     <div id="screen"></div>
     <div id="status" class="status-badge">Подключение…</div>
+    <button id="btnCursor" class="cursor-toggle">Курсор: системный</button>
   </div>
 
   <div class="pw-overlay" id="pwOverlay">
@@ -2363,6 +2375,14 @@ def novnc_page(server_id):
     let ro = null;
     const pwOverlay = document.getElementById('pwOverlay');
     const pwInput = document.getElementById('pwInput');
+
+    // Переключение курсора: системный (по умолчанию, не пропадает при
+    // вложенном VNC) либо серверный (стандартное поведение noVNC).
+    const btnCursor = document.getElementById('btnCursor');
+    btnCursor.addEventListener('click', () => {{
+      const serverCursor = document.body.classList.toggle('server-cursor');
+      btnCursor.textContent = serverCursor ? 'Курсор: серверный' : 'Курсор: системный';
+    }});
 
     function openPwModal() {{
       pwInput.value = '';
@@ -2418,7 +2438,7 @@ def novnc_page(server_id):
         }}
 
         setStatus('Подключаюсь…');
-        rfb = new RFB(screen, wsUrl, {{ shared: true, showDotCursor: true }});
+        rfb = new RFB(screen, wsUrl, {{ shared: true }});
         // Масштабируем картинку под контейнер с сохранением пропорций
         rfb.scaleViewport = true;
         rfb.clipViewport = false;
