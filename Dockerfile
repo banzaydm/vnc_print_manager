@@ -10,8 +10,14 @@ ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 COPY requirements.txt .
 RUN pip install --no-cache-dir --timeout 60 --retries 5 -r requirements.txt -i $PIP_INDEX_URL
 
-# FFmpeg для перекодировки RTSP в HLS (просмотр камер в браузере)
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+# FFmpeg для перекодировки RTSP в HLS (просмотр камер в браузере).
+# Зеркало APT настраивается через --build-arg APT_MIRROR (например,
+# --build-arg APT_MIRROR=https://deb.debian.org/debian), чтобы обойти
+# недоступность официальных репозиториев Debian.
+ARG APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/debian
+RUN sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources 2>/dev/null; \
+    sed -i "s|http://deb.debian.org/debian|$APT_MIRROR|g" /etc/apt/sources.list 2>/dev/null; \
+    apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
 
 # Копируем все файлы приложения
 COPY . .
