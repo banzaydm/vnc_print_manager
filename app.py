@@ -2418,7 +2418,7 @@ def novnc_page(server_id):
         }}
 
         setStatus('Подключаюсь…');
-        rfb = new RFB(screen, wsUrl, {{ shared: true }});
+        rfb = new RFB(screen, wsUrl, {{ shared: true, showDotCursor: true }});
         // Масштабируем картинку под контейнер с сохранением пропорций
         rfb.scaleViewport = true;
         rfb.clipViewport = false;
