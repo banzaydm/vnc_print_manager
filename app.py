@@ -1182,10 +1182,24 @@ _HLS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'instance', 
 _HLS_LOCK = threading.Lock()
 _HLS_PROCESSES = {}  # camera_id -> Popen
 
+_FFMPEG_BIN = None
+
+
+def _ffmpeg_bin():
+    """Путь к FFmpeg: статический бинарь из imageio-ffmpeg (pip), иначе 'ffmpeg' из PATH."""
+    global _FFMPEG_BIN
+    if _FFMPEG_BIN is None:
+        try:
+            import imageio_ffmpeg
+            _FFMPEG_BIN = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception:
+            _FFMPEG_BIN = 'ffmpeg'
+    return _FFMPEG_BIN
+
 
 def _hls_ffmpeg_available():
     try:
-        r = subprocess.run(['ffmpeg', '-version'], capture_output=True, timeout=5)
+        r = subprocess.run([_ffmpeg_bin(), '-version'], capture_output=True, timeout=5)
         return r.returncode == 0
     except Exception:
         return False
@@ -1250,7 +1264,7 @@ def camera_hls(camera_id):
                 pass
 
         cmd = [
-            'ffmpeg', '-hide_banner', '-loglevel', 'error',
+            _ffmpeg_bin(), '-hide_banner', '-loglevel', 'error',
             '-rtsp_transport', 'tcp',
             '-i', rtsp_url,
             '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
