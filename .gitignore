@@ -37,9 +37,6 @@ ENV/
 .DS_Store
 Thumbs.db
 
-# Docker
-.dockerignore
-
 # Runtime HLS segments
 instance/hls/
 

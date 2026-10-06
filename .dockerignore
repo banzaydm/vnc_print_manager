@@ -1,0 +1,45 @@
+# Бинарные файлы
+__pycache__/
+*.py[cod]
+*$py.class
+
+# База данных
+*.db
+*.sqlite
+*.sqlite3
+
+# Логи
+*.log
+instance/*.log
+
+# Виртуальное окружение
+venv/
+env/
+ENV/
+
+# Репозиторий: git-история не нужна в образе и не должна быть доступна
+# через статику приложения
+.git/
+
+# Runtime-данные: создаются приложением при старте (instance/) и при
+# работе (uploads/), в образ попадать не должны
+instance/
+uploads/
+backups/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+.dockerignore
+
+# Временные файлы
+*.tmp
+*.temp

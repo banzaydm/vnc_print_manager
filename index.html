@@ -8,6 +8,7 @@
     <meta http-equiv="Expires" content="0">
     <title>VNC Manager</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="/hls.min.js"></script>
     <style>
         :root {
             /* Цвета для светлой темы */
@@ -519,7 +520,29 @@
         .action-btn:hover {
             background: var(--primary-dark);
         }
-        
+
+        /* Индикатор статуса RustDesk на кнопке «Подключиться»:
+           зелёный — онлайн, красный — офлайн, серый — ID/панель не заполнены */
+        .action-btn[data-rd]::before {
+            content: '';
+            width: 7px;
+            height: 7px;
+            min-width: 7px;
+            border-radius: 50%;
+            background: #9aa0a6;
+            transition: background 0.2s, box-shadow 0.2s;
+        }
+
+        .action-btn[data-rd][data-rd-state="online"]::before {
+            background: #2ecc71;
+            box-shadow: 0 0 4px rgba(46, 204, 113, 0.8);
+        }
+
+        .action-btn[data-rd][data-rd-state="offline"]::before {
+            background: #e74c3c;
+            box-shadow: 0 0 4px rgba(231, 76, 60, 0.7);
+        }
+
         .action-delete {
             background: rgba(239, 68, 68, 0.1);
             color: var(--danger);
@@ -1080,6 +1103,124 @@
             padding-left: 10px;
             border-left: 1px dashed var(--card-border);
         }
+
+        /* Стена камер: закреплённые камеры на вкладке «Камеры» */
+        .camera-wall-container {
+            margin-bottom: 16px;
+        }
+
+        .camera-wall {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+            gap: 12px;
+        }
+
+        .camera-wall-card {
+            background: var(--card-bg);
+            border: 1px solid var(--card-border);
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: var(--shadow);
+            cursor: pointer;
+            transition: box-shadow 0.2s, border-color 0.2s;
+        }
+
+        .camera-wall-card:hover {
+            border-color: var(--primary);
+            box-shadow: var(--shadow-lg);
+        }
+
+        .wall-card-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 10px;
+            background: var(--table-header-bg);
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .wall-card-name {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .wall-card-live {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 10px;
+            text-transform: uppercase;
+            color: var(--success);
+        }
+
+        .wall-card-live::before {
+            content: '';
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 6px var(--success);
+            animation: wallPulse 1.5s infinite;
+        }
+
+        @keyframes wallPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        .wall-card-body {
+            position: relative;
+            aspect-ratio: 16 / 9;
+            background: #000;
+        }
+
+        .wall-card-body video {
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #000;
+        }
+
+        .wall-card-placeholder {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 10px;
+            text-align: center;
+            font-size: 11px;
+            color: #94a3b8;
+            background: #0f172a;
+        }
+
+        .wall-card-placeholder i {
+            font-size: 22px;
+            opacity: 0.7;
+        }
+
+        .wall-card-unpin {
+            background: none;
+            border: none;
+            color: var(--favorite);
+            cursor: pointer;
+            font-size: 13px;
+            padding: 0;
+            opacity: 0.85;
+        }
+
+        .wall-card-unpin:hover {
+            opacity: 1;
+            transform: scale(1.15);
+        }
     </style>
 </head>
 <body data-theme="light">
@@ -1206,6 +1347,11 @@
                         <span>Обновить</span>
                     </button>
                 </div>
+            </div>
+
+            <!-- Стена камер: закреплённые камеры (вкладка «Камеры») -->
+            <div id="cameraWallContainer" class="camera-wall-container" style="display: none;">
+                <div class="camera-wall" id="cameraWall"></div>
             </div>
 
             <!-- Контейнер для таблицы устройств -->
@@ -2025,8 +2171,8 @@
 
     <script>
         // Версия приложения
-        const APP_VERSION = '1.0.3';
-        const APP_VERSION_DATE = '22.07.2026';
+        const APP_VERSION = '1.0.4';
+        const APP_VERSION_DATE = '07.10.2026';
 
         // Автоматически добавляем API-ключ ко всем запросам /api/*
         const _originalFetch = window.fetch.bind(window);
@@ -2156,6 +2302,7 @@
                 toggleGroupFilterMenu();
             });
             document.getElementById('refreshBtn')?.addEventListener('click', loadData);
+            window.addEventListener('beforeunload', () => { stopWallStreams(); });
             document.getElementById('rustdeskRefreshBtn')?.addEventListener('click', loadRustdeskDevices);
 
             document.addEventListener('click', (e) => {
@@ -2571,6 +2718,8 @@
         }
         
         async function showPage(page) {
+            // Уход со вкладки «Камеры» — гасим стену камер (hls/ffmpeg)
+            if (page !== 'cameras') { stopWallStreams(); }
             currentPage = page;
             
             // Показываем индикатор загрузки
@@ -2595,6 +2744,7 @@
             document.getElementById('scanContainer').style.display = 'none';
             document.getElementById('rustdeskContainer').style.display = 'none';
             document.getElementById('settingsContainer').style.display = 'none';
+            document.getElementById('cameraWallContainer').style.display = 'none';
             
             // Дополнительная очистка для гарантии
             if (page !== 'groups') {
@@ -2633,6 +2783,10 @@
                 // Показываем страницу устройств
                 document.getElementById('devicesControls').style.display = 'flex';
                 document.getElementById('devicesContainer').style.display = 'block';
+                if (page === 'cameras') {
+                    wallActive = true;
+                    document.getElementById('cameraWallContainer').style.display = 'block';
+                }
                 renderDevices();
             }
         }
@@ -3101,6 +3255,8 @@
                     sortGroupTable(parseInt(groupId), field);
                 });
             });
+
+            applyRdStatus();
         }
 
         function _renderDeviceTableRow(device) {
@@ -3110,7 +3266,7 @@
 
             const actions = device.type === 'server'
                 ? `
-                    <button class="action-btn" onclick="event.stopPropagation(); connectToServer(${device.id}, '${escapeHtml(device.rustdesk_id || '')}')" title="Подключиться через десктопный RustDesk">
+                    <button class="action-btn" data-rd="${escapeHtml(device.rustdesk_id || '')}" data-rd-ip="${escapeHtml(device.ip || '')}" onclick="event.stopPropagation(); connectToServer(${device.id}, '${escapeHtml(device.rustdesk_id || '')}')" title="Подключиться через десктопный RustDesk">
                         <i class="fas fa-tv"></i>
                         <span>Подключиться</span>
                     </button>
@@ -3673,7 +3829,7 @@
                 if (currentPage === 'printers' && device.type !== 'printer') return false;
                 if (currentPage === 'cameras' && device.type !== 'camera') return false;
                 if (currentPage === 'routers' && device.type !== 'router') return false;
-                if (currentPage === 'favorites' && !device.is_favorite) return false;
+                if (currentPage === 'favorites' && (!device.is_favorite || device.type === 'camera')) return false;
                 
                 // Поиск
                 if (searchTerm) {
@@ -3710,6 +3866,12 @@
             
             // Статистика
             updateTableStats(filteredDevices.length);
+
+            // Статусы RustDesk на свежеотрисованных кнопках
+            applyRdStatus();
+
+            // Стена камер (закреплённые камеры на вкладке «Камеры»)
+            renderCameraWall();
         }
         
         function sortTable(field) {
@@ -3811,6 +3973,7 @@
             const tableBody = document.getElementById(`group-table-body-${groupId}`);
             if (tableBody) {
                 tableBody.innerHTML = groupDevices.map(device => _renderDeviceTableRow(device)).join('');
+                applyRdStatus();
             }
         }
 
@@ -3953,7 +4116,7 @@
                 const status = device.status || 'offline';
                 
                 const favoriteBtn = `
-                    <button class="favorite-btn ${device.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${device.id}, '${device.type}', ${device.is_favorite ? 'false' : 'true'})" title="${device.is_favorite ? 'Убрать из избранного' : 'Добавить в избранное'}">
+                    <button class="favorite-btn ${device.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${device.id}, '${device.type}', ${device.is_favorite ? 'false' : 'true'})" title="${device.type === 'camera' ? (device.is_favorite ? 'Убрать со стены' : 'Закрепить на стене') : (device.is_favorite ? 'Убрать из избранного' : 'Добавить в избранное')}">
                         <i class="fas fa-star"></i>
                     </button>
                 `;
@@ -3993,7 +4156,7 @@
                         <td>
                             <div class="actions">
                                 ${device.type === 'server' ? `
-                                    <button class="action-btn" onclick="connectToServer(${device.id}, '${escapeHtml(device.rustdesk_id || '')}')" title="Подключиться через десктопный RustDesk">
+                                    <button class="action-btn" data-rd="${escapeHtml(device.rustdesk_id || '')}" data-rd-ip="${escapeHtml(device.ip || '')}" onclick="connectToServer(${device.id}, '${escapeHtml(device.rustdesk_id || '')}')" title="Подключиться через десктопный RustDesk">
                                         <i class="fas fa-tv"></i>
                                         <span>Подключиться</span>
                                     </button>
@@ -4030,6 +4193,173 @@
                     </tr>
                 `;
             }).join('');
+        }
+
+        // ===== Стена камер: закреплённые камеры на вкладке «Камеры» =====
+        // Для камеры is_favorite означает «закреплена на стене»:
+        // камеры не показываются во вкладке «Избранное», вместо этого —
+        // карточки с живым HLS-потоком сразу под строкой поиска.
+        let wallActive = false;
+        let wallEpoch = 0;
+        const wallStreams = new Map(); // cameraId -> { hls }
+
+        function wallPinnedCameras() {
+            const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
+            return devices.filter(d => {
+                if (d.type !== 'camera' || !d.is_favorite) return false;
+                if (searchTerm) {
+                    const searchText = (d.name + ' ' + d.ip + ' ' + (d.comment || '')).toLowerCase();
+                    if (!searchText.includes(searchTerm)) return false;
+                }
+                return true;
+            }).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'));
+        }
+
+        function renderCameraWall() {
+            const container = document.getElementById('cameraWallContainer');
+            const wall = document.getElementById('cameraWall');
+            if (!container || !wall) return;
+
+            const onPage = currentPage === 'cameras';
+            const wanted = onPage ? wallPinnedCameras() : [];
+            const wantedIds = new Set(wanted.map(d => d.id));
+
+            // Откреплённые камеры: снять карточку и погасить поток
+            wall.querySelectorAll('.camera-wall-card').forEach(card => {
+                const id = parseInt(card.dataset.wallId, 10);
+                if (!wantedIds.has(id)) {
+                    wallStopStream(id);
+                    card.remove();
+                }
+            });
+
+            container.style.display = (onPage && wanted.length) ? 'block' : 'none';
+            if (!wanted.length) return;
+
+            // Новые карточки: добавить и запустить поток; уже играющие не трогаем
+            wanted.forEach(cam => {
+                if (wall.querySelector(`.camera-wall-card[data-wall-id="${cam.id}"]`)) return;
+                const card = document.createElement('div');
+                card.className = 'camera-wall-card';
+                card.dataset.wallId = cam.id;
+                card.innerHTML = `
+                    <div class="wall-card-header">
+                        <span class="wall-card-name"></span>
+                        <span class="wall-card-live" style="display: none;">Live</span>
+                        <button class="wall-card-unpin" title="Убрать со стены"><i class="fas fa-star"></i></button>
+                    </div>
+                    <div class="wall-card-body">
+                        <video muted autoplay playsinline></video>
+                        <div class="wall-card-placeholder">
+                            <i class="fas fa-video"></i>
+                            <span class="wall-card-msg">Подключение…</span>
+                        </div>
+                    </div>`;
+                card.querySelector('.wall-card-name').textContent = cam.name || ('Камера ' + cam.ip);
+                card.addEventListener('click', () => openCameraStream(cam.id));
+                card.querySelector('.wall-card-unpin').addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleFavorite(cam.id, 'camera', false);
+                });
+                wall.appendChild(card);
+                if (wallActive) wallStartStream(cam.id);
+            });
+        }
+
+        function wallSetStatus(id, text, live) {
+            const card = document.querySelector(`.camera-wall-card[data-wall-id="${id}"]`);
+            if (!card) return;
+            const ph = card.querySelector('.wall-card-placeholder');
+            const msg = card.querySelector('.wall-card-msg');
+            const badge = card.querySelector('.wall-card-live');
+            if (ph) ph.style.display = text ? 'flex' : 'none';
+            if (msg && text) msg.textContent = text;
+            if (badge) badge.style.display = live ? 'inline-flex' : 'none';
+        }
+
+        async function wallStartStream(id, attempt) {
+            attempt = attempt || 0;
+            if (!wallActive || wallStreams.has(id)) return;
+            const epoch = wallEpoch;
+            wallStreams.set(id, { hls: null });
+            wallSetStatus(id, 'Подключение…', false);
+
+            try {
+                // POST блокирующий: ffmpeg стартует и пишет плейлист (до ~12 с)
+                const r = await fetch(`/api/camera/stream/${id}`, { method: 'POST' });
+
+                // Камеру открепили или ушли со вкладки, пока стартовали — добить DELETE,
+                // иначе ffmpeg останется висеть без карточки.
+                const card = document.querySelector(`.camera-wall-card[data-wall-id="${id}"]`);
+                if (epoch !== wallEpoch || !wallActive || !card) {
+                    wallStreams.delete(id);
+                    fetch(`/api/camera/stream/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+                    return;
+                }
+                if (!r.ok) {
+                    const d = await r.json().catch(() => ({}));
+                    wallStreams.delete(id);
+                    wallSetStatus(id, d.error || 'Поток недоступен', false);
+                    return;
+                }
+                wallAttachHls(id, card.querySelector('video'), attempt);
+            } catch (e) {
+                if (epoch === wallEpoch) {
+                    wallStreams.delete(id);
+                    wallSetStatus(id, 'Ошибка подключения', false);
+                }
+            }
+        }
+
+        function wallAttachHls(id, video, attempt) {
+            const st = wallStreams.get(id);
+            if (!st || !video) return;
+
+            if (window.Hls && Hls.isSupported()) {
+                const hls = new Hls({ liveDurationInfinity: true, maxBufferLength: 4 });
+                st.hls = hls;
+                hls.on(Hls.Events.MANIFEST_PARSED, () => wallSetStatus(id, null, true));
+                hls.on(Hls.Events.ERROR, (evt, data) => {
+                    if (!data.fatal) return;
+                    try { hls.destroy(); } catch (e) {}
+                    wallStreams.delete(id);
+                    wallRetry(id, attempt);
+                });
+                hls.loadSource(`/api/camera/stream/${id}/playlist.m3u8`);
+                hls.attachMedia(video);
+            } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+                video.src = `/api/camera/stream/${id}/playlist.m3u8`;
+                wallSetStatus(id, null, true);
+            } else {
+                wallStreams.delete(id);
+                wallSetStatus(id, 'Браузер не поддерживает HLS', false);
+            }
+        }
+
+        // Ретраи: например, закрытый полный просмотр гасит общий ffmpeg (DELETE)
+        function wallRetry(id, attempt) {
+            if (!wallActive || attempt >= 3) {
+                wallSetStatus(id, 'Поток недоступен', false);
+                return;
+            }
+            wallSetStatus(id, 'Переподключение…', false);
+            setTimeout(() => { wallStartStream(id, attempt + 1); }, 3000);
+        }
+
+        function wallStopStream(id) {
+            const st = wallStreams.get(id);
+            if (st && st.hls) { try { st.hls.destroy(); } catch (e) {} }
+            wallStreams.delete(id);
+            fetch(`/api/camera/stream/${id}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+        }
+
+        function stopWallStreams() {
+            if (!wallActive && !wallStreams.size) return;
+            wallActive = false;
+            wallEpoch++;
+            Array.from(wallStreams.keys()).forEach(id => wallStopStream(id));
+            const wall = document.getElementById('cameraWall');
+            if (wall) wall.innerHTML = '';
         }
 
         async function toggleFavorite(id, type, isFavorite) {
@@ -5171,6 +5501,71 @@
                 return false;
             }
         }
+
+        // ---- Статусы RustDesk на кнопках «Подключиться» ------------------
+        // Точка: зелёная — онлайн, красная — офлайн, серая — ID не указан
+        // или панель RustDesk не настроена. Опрос раз в 45 секунд, состояние
+        // применяется и к уже отрисованным кнопкам, и к новым после рендера.
+        let rdStatusMap = {};
+        let rdStatusByIp = {};
+        let rdStatusConfigured = false;
+
+        async function pollRdStatus() {
+            if (document.hidden) return; // фоновая вкладка — не дёргаем панель
+            try {
+                const response = await fetch('/api/rustdesk/status', { cache: 'no-store' });
+                if (!response.ok) return; // ошибка/нет авторизации — оставляем последнее известное
+                const data = await response.json();
+                if (!data.success) return;
+                rdStatusConfigured = !!data.configured;
+                rdStatusMap = data.status || {};
+                rdStatusByIp = data.by_ip || {};
+                applyRdStatus();
+            } catch (e) {
+                // сеть или панель недоступны — статус просто не обновится
+            }
+        }
+
+        function applyRdStatus() {
+            document.querySelectorAll('button[data-rd]').forEach(btn => {
+                const baseTitle = btn.dataset.rdBaseTitle ||
+                    (btn.dataset.rdBaseTitle = btn.title || 'Подключиться через десктопный RustDesk');
+                const rdId = (btn.getAttribute('data-rd') || '').replace(/\s+/g, '');
+                const ip = (btn.dataset.rdIp || '').trim();
+
+                // Статус ищем по RustDesk ID, а если ID не заполнен — по IP
+                // устройства (панель отдаёт last_online_ip, серверы часто
+                // привязаны только по IP). Панель не настроена → индикатор
+                // не зажигается, даже если карта статусов не пустая.
+                const st = rdStatusConfigured
+                    ? ((rdId && rdStatusMap[rdId]) || (ip && rdStatusByIp[ip]) || null)
+                    : null;
+
+                if (!st) {
+                    btn.dataset.rdState = 'none';
+                    btn.title = baseTitle + (
+                        !rdStatusConfigured ? ''
+                            : rdId ? ' — нет данных в панели RustDesk'
+                                : ' — RustDesk ID не указан'
+                    );
+                    return;
+                }
+                if (st.online) {
+                    btn.dataset.rdState = 'online';
+                    btn.title = baseTitle + ' — RustDesk: онлайн';
+                } else {
+                    btn.dataset.rdState = 'offline';
+                    const last = st.last
+                        ? new Date(st.last * 1000).toLocaleString('ru-RU',
+                            { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+                        : '';
+                    btn.title = baseTitle + ' — RustDesk: офлайн' + (last ? `, последний раз ${last}` : '');
+                }
+            });
+        }
+
+        pollRdStatus();
+        setInterval(pollRdStatus, 45000);
 
         // Автообновление списка RustDesk (раз в 30 секунд, только на активной вкладке)
         setInterval(() => {

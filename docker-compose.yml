@@ -6,6 +6,7 @@ services:
       - "6080:6080"  # noVNC WebSocket прокси (websockify запускается внутри контейнера)
     volumes:
       - vnc_manager_data:/app/instance  # БД, бэкапы, токены noVNC
+      - vnc_uploads_data:/app/uploads    # favicon/логотип: переживают пересборку
     environment:
       - FLASK_APP=app.py
       - FLASK_ENV=production
@@ -33,6 +34,8 @@ services:
 
 volumes:
   vnc_manager_data:
+    driver: local
+  vnc_uploads_data:
     driver: local
 
 networks:
