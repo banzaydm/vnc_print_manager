@@ -28,6 +28,7 @@ def _backup_to_import_payload(backup_data):
                 'name': device.get('name'),
                 'ip': device.get('ip'),
                 'port': device.get('port', 5900),
+                'alts': device.get('alts', ''),
                 'group_id': device.get('group_id'),
                 'is_favorite': device.get('is_favorite', False),
                 'comment': device.get('comment', ''),
@@ -139,6 +140,9 @@ def import_data_core(data):
         if existing:
             existing.name = server_data['name']
             existing.port = server_data.get('port', 5900)
+            existing.alts = Server.dumps_alts(
+                Server.parse_alts(server_data.get('alts'), existing.port)
+            )
             existing.group_id = group_id
             existing.is_favorite = server_data.get('is_favorite', False)
             existing.comment = server_data.get('comment', '')
@@ -149,6 +153,9 @@ def import_data_core(data):
                 name=server_data['name'],
                 ip=server_data['ip'],
                 port=server_data.get('port', 5900),
+                alts=Server.dumps_alts(
+                    Server.parse_alts(server_data.get('alts'), server_data.get('port', 5900))
+                ),
                 group_id=group_id,
                 is_favorite=server_data.get('is_favorite', False),
                 comment=server_data.get('comment', ''),

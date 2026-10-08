@@ -237,13 +237,15 @@ def rustdesk_devices():
     now = time.time()
 
     # Карты привязок и совпадений по IP для кнопки «Добавить»
+    # Индексируем все адреса сервера (основной + запасные)
     linked_ids = set()
     ip_server_map = {}
     for s in Server.query.all():
         if s.rustdesk_id:
             linked_ids.add(s.rustdesk_id)
-        if s.ip and s.ip not in ip_server_map:
-            ip_server_map[s.ip] = s
+        for host, _port in s.all_endpoints():
+            if host and host not in ip_server_map:
+                ip_server_map[host] = s
 
     devices = []
     for p in peers:

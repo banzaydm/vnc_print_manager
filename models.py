@@ -29,12 +29,71 @@ class Server(db.Model):
     name = db.Column(db.String(100), nullable=False)
     ip = db.Column(db.String(45), unique=True, nullable=False)
     port = db.Column(db.Integer, default=5900)
+    alts = db.Column(db.Text, default='')  # доп. адреса: "ip:port,ip:port"
     group_id = db.Column(db.Integer, db.ForeignKey('group.id'), nullable=True)
     is_favorite = db.Column(db.Boolean, default=False)
     last_seen = db.Column(db.DateTime, nullable=True)
     comment = db.Column(db.Text, default='')
     rustdesk_id = db.Column(db.String(100), default='')
     created_at = db.Column(db.DateTime, default=utcnow)
+
+    @staticmethod
+    def parse_alts(raw, default_port=None):
+        """Разбирает alts (строку 'ip:port,ip:port' или список dict/строк) в [(ip, port)].
+
+        Порт, не указанный явно, берётся из default_port. Пустые/некорректные
+        записи пропускаются, дубликаты (включая основной адрес) не возвращаются.
+        """
+        entries = []
+        if raw:
+            if isinstance(raw, (list, tuple)):
+                entries = list(raw)
+            else:
+                entries = [e.strip() for e in str(raw).split(',') if e.strip()]
+        seen = set()
+        result = []
+        for entry in entries:
+            if isinstance(entry, dict):
+                host = str(entry.get('ip') or entry.get('host') or '').strip()
+                port = entry.get('port')
+            else:
+                text = str(entry).strip()
+                host, port = text, None
+                if ':' in text:
+                    head, tail = text.rsplit(':', 1)
+                    if tail.isdigit():
+                        host, port = head.strip(), int(tail)
+                    elif not tail.strip():
+                        continue  # пустой порт после двоеточия — мусорная запись
+            if not host:
+                continue
+            try:
+                port = int(port) if port is not None else int(default_port or 5900)
+            except (TypeError, ValueError):
+                port = int(default_port or 5900)
+            if not (1 <= port <= 65535):
+                continue
+            key = (host, port)
+            if key in seen:
+                continue
+            seen.add(key)
+            result.append(key)
+        return result
+
+    @staticmethod
+    def dumps_alts(endpoints):
+        """Сериализует [(ip, port)] в строку для хранения."""
+        return ','.join(f'{host}:{port}' for host, port in endpoints)
+
+    @property
+    def alt_endpoints(self):
+        """[(ip, port)] по всем доп. адресам (без основного)."""
+        primary = (self.ip, int(self.port or 5900))
+        return [ep for ep in self.parse_alts(self.alts, self.port) if ep != primary]
+
+    def all_endpoints(self):
+        """[(ip, port)] по всем адресам: основной + доп."""
+        return [(self.ip, int(self.port or 5900))] + self.alt_endpoints
 
     def __repr__(self):
         return f'<Server {self.name} ({self.ip})>'

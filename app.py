@@ -250,6 +250,7 @@ def init_db():
         _ensure_column('printer', 'is_favorite', "ALTER TABLE printer ADD COLUMN is_favorite BOOLEAN DEFAULT 0")
         _ensure_column('server', 'is_favorite', "ALTER TABLE server ADD COLUMN is_favorite BOOLEAN DEFAULT 0")
         _ensure_column('server', 'rustdesk_id', "ALTER TABLE server ADD COLUMN rustdesk_id VARCHAR(100) DEFAULT ''")
+        _ensure_column('server', 'alts', "ALTER TABLE server ADD COLUMN alts TEXT DEFAULT ''")
 
         # Настройки по умолчанию (только если таблица пуста)
         if Settings.query.count() == 0:

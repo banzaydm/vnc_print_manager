@@ -41,11 +41,30 @@ def get_printer_status_cached(ip):
     return online
 
 
+def pick_reachable_endpoint(ip, port, alt_endpoints=None):
+    """Возвращает первый доступный адрес из кэша статусов, иначе основной.
+
+    alt_endpoints — список [(ip, port)]. Проверка идёт по кэшу (TTL-обёртки),
+    поэтому стоимость — не более одной сетевой пробы на адрес.
+    """
+    primary = (str(ip), int(port or 5900))
+    candidates = [primary]
+    for host, p in (alt_endpoints or []):
+        endpoint = (str(host), int(p or 5900))
+        if endpoint != primary and endpoint not in candidates:
+            candidates.append(endpoint)
+    for host, p in candidates:
+        if get_server_status_cached(host, p):
+            return host, p
+    return primary
+
+
 def _fetch_statuses_parallel(items, is_printer=False, is_web=False):
     """Параллельно проверяет статусы устройств, возвращает {id: bool}.
 
     Отдельные ошибки проб не роняют общий запрос — такие устройства
-    помечаются как offline.
+    помечаются как offline. У серверов проверяются все адреса
+    (основной + alts): устройство online, если доступен хотя бы один.
     """
     result = {}
     if not items:
@@ -56,7 +75,10 @@ def _fetch_statuses_parallel(items, is_printer=False, is_web=False):
             return item.id, get_printer_status_cached(item.ip)
         if is_web:
             return item.id, get_web_device_status_cached(item.ip, item.port)
-        return item.id, get_server_status_cached(item.ip, item.port)
+        endpoints = item.all_endpoints()
+        return item.id, any(
+            get_server_status_cached(host, p) for host, p in endpoints
+        )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(32, len(items))) as executor:
         future_to_item = {executor.submit(probe, item): item for item in items}

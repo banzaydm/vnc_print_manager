@@ -11,6 +11,7 @@
     <script src="/hls.min.js"></script>
     <style>
         :root {
+            color-scheme: light;
             /* Цвета для светлой темы */
             --primary: #4a6cf7;
             --primary-dark: #3a5ce5;
@@ -38,6 +39,7 @@
         }
         
         [data-theme="dark"] {
+            color-scheme: dark;
             --bg-color: #0f172a;
             --text-color: #cbd5e1;
             --card-bg: #1e293b;
@@ -753,11 +755,22 @@
         
         .form-select {
             appearance: none;
+            border: 1px solid var(--input-border);
+            border-radius: 6px;
+            background: var(--input-bg);
+            color: var(--text-color);
+            font-size: 14px;
+            padding: 10px 12px;
             background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%2364748b' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
             background-repeat: no-repeat;
             background-position: right 12px center;
             background-size: 14px;
             padding-right: 36px;
+        }
+
+        select option {
+            background: var(--input-bg);
+            color: var(--text-color);
         }
         
         /* Вкладки импорта/экспорта */
@@ -1642,6 +1655,14 @@
                                     Принтеры
                                 </label>
                                 <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="clearDbCameras" checked>
+                                    Камеры
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px;">
+                                    <input type="checkbox" id="clearDbRouters" checked>
+                                    Роутеры
+                                </label>
+                                <label style="display: flex; align-items: center; gap: 8px;">
                                     <input type="checkbox" id="clearDbGroups" checked>
                                     Группы
                                 </label>
@@ -1665,7 +1686,7 @@
                                 </div>
                                 <div style="margin-bottom: 8px; display: flex; align-items: center;">
                                     <i class="fas fa-calendar" style="width: 20px; margin-right: 8px; color: var(--primary);"></i>
-                                    <span>Дата обновления: <strong style="color: var(--text-primary);">${APP_VERSION_DATE}</strong></span>
+                                    <span>Дата обновления: <strong id="appVersionDateDisplay" style="color: var(--text-primary);">${APP_VERSION_DATE}</strong></span>
                                 </div>
                                 <div style="margin-bottom: 8px; display: flex; align-items: center;">
                                     <i class="fas fa-rocket" style="width: 20px; margin-right: 8px; color: var(--success);"></i>
@@ -1704,6 +1725,20 @@
                             <button id="startScanBtn" class="btn">
                                 <i class="fas fa-search"></i>
                                 Начать сканирование
+                            </button>
+
+                            <button id="scanCancelBtn" class="btn" style="display: none;">
+                                <i class="fas fa-stop"></i>
+                                Остановить
+                            </button>
+
+                            <button id="scanAddAllBtn" class="btn btn-primary" style="display: none;">
+                                <i class="fas fa-plus"></i>
+                                Добавить все
+                            </button>
+                            <button id="scanExportBtn" class="btn" style="display: none;">
+                                <i class="fas fa-file-csv"></i>
+                                CSV
                             </button>
                         </div>
                     </div>
@@ -1817,6 +1852,16 @@
                                     <input type="number" id="serverPort" class="form-input" value="5900">
                                 </div>
                             </div>
+                            <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                                Основной адрес. Дополнительные адреса ниже — сервер онлайн, если доступен хотя бы один.
+                            </small>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Дополнительные адреса</label>
+                            <div id="serverAltRows"></div>
+                            <button type="button" class="btn btn-sm" id="addServerAltBtn" style="margin-top: 8px;">
+                                <i class="fas fa-plus"></i> Добавить адрес
+                            </button>
                         </div>
                         <div class="form-group">
                             <label class="form-label">RustDesk ID машины</label>
@@ -1941,7 +1986,7 @@
             </div>
             <div class="modal-body">
                 <div id="clearDbStep1">
-                    <p style="margin: 0;">Очистить базу данных? Все группы, серверы и принтеры будут удалены.</p>
+                    <p style="margin: 0;">Очистить базу данных? Будут удалены категории, отмеченные в настройках: серверы, принтеры, камеры, роутеры, группы.</p>
                 </div>
                 <div id="clearDbStep2" style="display: none;">
                     <p style="margin: 0;">Подтвердите очистку базы данных (действие необратимо).</p>
@@ -2172,7 +2217,7 @@
     <script>
         // Версия приложения
         const APP_VERSION = '1.0.4';
-        const APP_VERSION_DATE = '07.10.2026';
+        const APP_VERSION_DATE = '08.10.2026';
 
         // Автоматически добавляем API-ключ ко всем запросам /api/*
         const _originalFetch = window.fetch.bind(window);
@@ -2202,6 +2247,10 @@
             if (versionDisplay) {
                 versionDisplay.textContent = APP_VERSION;
             }
+            const dateDisplay = document.getElementById('appVersionDateDisplay');
+            if (dateDisplay) {
+                dateDisplay.textContent = APP_VERSION_DATE;
+            }
         }
         
         // Глобальные переменные
@@ -2215,7 +2264,7 @@
         let expandedGroups = new Set();
         let expandedSubnets = new Set();
         let subnetNames = new Map(); // Хранилище пользовательских названий подсетей
-        let _clearDbOptions = { clear_servers: true, clear_printers: true, clear_groups: true };
+        let _clearDbOptions = { clear_servers: true, clear_printers: true, clear_cameras: true, clear_routers: true, clear_groups: true };
         let expandedGroupFilterNodes = new Set();
         let moveContext = null;
         
@@ -2284,6 +2333,12 @@
             
             // Тема
             document.getElementById('themeSwitch').addEventListener('click', toggleTheme);
+            document.getElementById('addServerAltBtn').addEventListener('click', () => addServerAltRow());
+            document.getElementById('themeSelect').addEventListener('change', function() {
+                document.body.setAttribute('data-theme', this.value);
+                localStorage.setItem('theme', this.value);
+                updateThemeButton(this.value);
+            });
             
             // Кнопки в шапке
             document.getElementById('addBtn').addEventListener('click', () => showDeviceModal());
@@ -2357,6 +2412,8 @@
             document.body.setAttribute('data-theme', newTheme);
             localStorage.setItem('theme', newTheme);
             updateThemeButton(newTheme);
+            const themeSelectSync = document.getElementById('themeSelect');
+            if (themeSelectSync) themeSelectSync.value = newTheme;
             
             // Применяем сохраненные цвета после смены темы
             applyPrimaryColor();
@@ -2793,8 +2850,10 @@
 
         // Функции для страницы сканирования сети
         let scanResults = [];
+        let scanUnrecognized = [];
 
         function initScanPage() {
+            restoreLastScan();
             // Определяем текущую подсеть автоматически
             const currentIP = window.location.hostname;
             if (currentIP && currentIP !== 'localhost' && currentIP !== '127.0.0.1') {
@@ -2809,6 +2868,20 @@
             const startBtn = document.getElementById('startScanBtn');
             if (startBtn) {
                 startBtn.onclick = startNetworkScan;
+            }
+
+            const scanCancelBtn = document.getElementById('scanCancelBtn');
+            if (scanCancelBtn) {
+                scanCancelBtn.onclick = cancelNetworkScan;
+            }
+
+            const addAllBtn = document.getElementById('scanAddAllBtn');
+            if (addAllBtn) {
+                addAllBtn.onclick = addAllScannedDevices;
+            }
+            const exportBtn = document.getElementById('scanExportBtn');
+            if (exportBtn) {
+                exportBtn.onclick = exportScanCsv;
             }
         }
 
@@ -2827,16 +2900,17 @@
             const emptyDiv = document.getElementById('scanEmpty');
             const listDiv = document.getElementById('scanList');
             const startBtn = document.getElementById('startScanBtn');
+            const cancelBtn = document.getElementById('scanCancelBtn');
 
-            // Показываем прогресс
             progressDiv.style.display = 'block';
             progressBar.style.width = '0%';
             progressText.textContent = '0%';
-            statusText.textContent = 'Подготовка к сканированию...';
+            statusText.textContent = 'Запуск сканирования...';
             resultsDiv.style.display = 'block';
             emptyDiv.style.display = 'none';
             listDiv.style.display = 'none';
             startBtn.disabled = true;
+            if (cancelBtn) cancelBtn.style.display = '';
 
             try {
                 const response = await fetch('/api/scan', {
@@ -2844,47 +2918,82 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ range: range })
                 });
-
                 const data = await response.json();
                 if (!response.ok) {
                     throw new Error(data.error || 'Ошибка сканирования');
                 }
-
-                // Имитируем прогресс (в реальном приложении здесь будет WebSocket или Server-Sent Events)
-                let progress = 0;
-                const progressInterval = setInterval(() => {
-                    progress += 5;
-                    if (progress > 90) progress = 90;
-                    progressBar.style.width = progress + '%';
-                    progressText.textContent = progress + '%';
-                    statusText.textContent = `Сканирование... ${progress}%`;
-                }, 200);
-
-                // Ждем завершения сканирования
-                await new Promise(resolve => setTimeout(resolve, 3000));
-
-                clearInterval(progressInterval);
-                progressBar.style.width = '100%';
-                progressText.textContent = '100%';
-                statusText.textContent = 'Сканирование завершено';
-
-                scanResults = data.results || [];
-                displayScanResults();
-
+                await pollScanProgress(progressBar, progressText, statusText);
             } catch (error) {
                 console.error('Ошибка сканирования:', error);
-                showNotification(error?.message || 'Ошибка сканирования сети', 'error');
+                showNotification(error?.message || 'Ошибка сканирования', 'error');
                 progressDiv.style.display = 'none';
             } finally {
                 startBtn.disabled = false;
+                if (cancelBtn) cancelBtn.style.display = 'none';
+            }
+        }
+
+        async function pollScanProgress(progressBar, progressText, statusText) {
+            while (true) {
+                await new Promise(resolve => setTimeout(resolve, 700));
+                let st;
+                try {
+                    const response = await fetch('/api/scan/status');
+                    st = await response.json();
+                } catch (e) {
+                    continue;
+                }
+                const total = st.total || 0;
+                const checked = st.checked || 0;
+                const pct = total ? Math.min(100, Math.round(checked * 100 / total)) : 0;
+                progressBar.style.width = pct + '%';
+                progressText.textContent = pct + '%';
+                statusText.textContent = `Проверено ${checked} из ${total} · найдено ${st.found_devices || 0}`;
+
+                if (st.status === 'running') {
+                    continue;
+                }
+                scanResults = st.results || [];
+                scanUnrecognized = st.unrecognized || [];
+                if (st.status === 'done') {
+                    progressBar.style.width = '100%';
+                    progressText.textContent = '100%';
+                    statusText.textContent = `Сканирование завершено: найдено ${st.found_devices || 0}`;
+                    saveLastScan(st.range, scanResults, scanUnrecognized);
+                    displayScanResults();
+                } else if (st.status === 'cancelled') {
+                    statusText.textContent = `Остановлено: проверено ${checked} из ${total}`;
+                    saveLastScan(st.range, scanResults, scanUnrecognized);
+                    displayScanResults();
+                    showNotification('Сканирование остановлено', 'success');
+                } else if (st.status === 'error') {
+                    statusText.textContent = 'Ошибка сканирования: ' + (st.error || 'неизвестно');
+                    displayScanResults();
+                    showNotification(st.error || 'Ошибка сканирования', 'error');
+                }
+                return;
+            }
+        }
+
+        async function cancelNetworkScan() {
+            try {
+                await fetch('/api/scan/cancel', { method: 'POST' });
+            } catch (e) {
+                showNotification('Не удалось остановить сканирование', 'error');
             }
         }
 
         function displayScanResults() {
             const emptyDiv = document.getElementById('scanEmpty');
             const listDiv = document.getElementById('scanList');
+            const exportBtn = document.getElementById('scanExportBtn');
+            const addAllBtn = document.getElementById('scanAddAllBtn');
+            const total = scanResults.length + scanUnrecognized.length;
 
-            if (scanResults.length === 0) {
+            if (exportBtn) exportBtn.style.display = total ? '' : 'none';
+            if (addAllBtn) addAllBtn.style.display = scanResults.length ? '' : 'none';
+
+            if (total === 0) {
                 emptyDiv.style.display = 'block';
                 listDiv.style.display = 'none';
                 emptyDiv.innerHTML = `
@@ -2897,67 +3006,47 @@
             emptyDiv.style.display = 'none';
             listDiv.style.display = 'block';
 
-            const serversHtml = scanResults
-                .filter(r => r.type === 'server')
-                .map(device => renderScanDevice(device))
-                .join('');
+            const groups = [
+                { list: scanResults.filter(r => r.type === 'server'), icon: 'fa-server', title: 'Найденные VNC серверы' },
+                { list: scanResults.filter(r => r.type === 'printer'), icon: 'fa-print', title: 'Найденные принтеры' },
+                { list: scanResults.filter(r => r.type === 'camera'), icon: 'fa-video', title: 'Найденные камеры' },
+                { list: scanResults.filter(r => r.type === 'router'), icon: 'fa-network-wired', title: 'Найденные роутеры' },
+                { list: scanUnrecognized, icon: 'fa-question-circle', title: 'Живые, но не распознанные', unrecog: true }
+            ];
 
-            const printersHtml = scanResults
-                .filter(r => r.type === 'printer')
-                .map(device => renderScanDevice(device))
-                .join('');
+            listDiv.innerHTML = groups.filter(g => g.list.length).map(g => `
+                <div style="margin-bottom: 24px;">
+                    <h3 style="margin-bottom: 12px; color: var(--text-color);">
+                        <i class="fas ${g.icon}"></i> ${g.title} (${g.list.length})
+                    </h3>
+                    <div style="display: grid; gap: 12px;">
+                        ${g.list.map(item => g.unrecog ? renderUnrecognizedDevice(item) : renderScanDevice(item)).join('')}
+                    </div>
+                </div>
+            `).join('');
+        }
 
-            const camerasHtml = scanResults
-                .filter(r => r.type === 'camera')
-                .map(device => renderScanDevice(device))
-                .join('');
-
-            const routersHtml = scanResults
-                .filter(r => r.type === 'router')
-                .map(device => renderScanDevice(device))
-                .join('');
-
-            listDiv.innerHTML = `
-                ${serversHtml ? `
-                    <div style="margin-bottom: 24px;">
-                        <h3 style="margin-bottom: 12px; color: var(--text-color);">
-                            <i class="fas fa-server"></i> Найденные VNC серверы (${scanResults.filter(r => r.type === 'server').length})
-                        </h3>
-                        <div style="display: grid; gap: 12px;">
-                            ${serversHtml}
-                        </div>
+        function renderUnrecognizedDevice(u) {
+            const ports = u.ports || [];
+            const info = [ports.length ? 'Открытые порты: ' + ports.join(', ') : 'Открытых TCP-портов нет'];
+            if (u.mac) info.push(u.mac);
+            if (u.notes && u.notes.length) info.push(u.notes.join(' • '));
+            const titleHtml = u.name
+                ? `${escapeHtml(u.name)} <span style="color: var(--text-secondary); font-weight: 400;">&middot; ${u.ip}</span>`
+                : u.ip;
+            return `
+                <div class="card" style="padding: 8px; display: flex; align-items: center; gap: 8px;">
+                    <div class="type-icon type-server" style="width: 28px; height: 28px; font-size: 12px;">
+                        <i class="fas fa-question"></i>
                     </div>
-                ` : ''}
-                ${printersHtml ? `
-                    <div style="margin-bottom: 24px;">
-                        <h3 style="margin-bottom: 12px; color: var(--text-color);">
-                            <i class="fas fa-print"></i> Найденные принтеры (${scanResults.filter(r => r.type === 'printer').length})
-                        </h3>
-                        <div style="display: grid; gap: 12px;">
-                            ${printersHtml}
-                        </div>
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-weight: 600; margin-bottom: 1px; font-size: 13px;">${titleHtml}</div>
+                        <div style="font-size: 11px; color: var(--text-secondary);">${escapeHtml(info.join(' • '))}</div>
                     </div>
-                ` : ''}
-                ${camerasHtml ? `
-                    <div style="margin-bottom: 24px;">
-                        <h3 style="margin-bottom: 12px; color: var(--text-color);">
-                            <i class="fas fa-video"></i> Найденные камеры (${scanResults.filter(r => r.type === 'camera').length})
-                        </h3>
-                        <div style="display: grid; gap: 12px;">
-                            ${camerasHtml}
-                        </div>
-                    </div>
-                ` : ''}
-                ${routersHtml ? `
-                    <div>
-                        <h3 style="margin-bottom: 12px; color: var(--text-color);">
-                            <i class="fas fa-network-wired"></i> Найденные роутеры (${scanResults.filter(r => r.type === 'router').length})
-                        </h3>
-                        <div style="display: grid; gap: 12px;">
-                            ${routersHtml}
-                        </div>
-                    </div>
-                ` : ''}
+                    <button class="btn" onclick="openAddDeviceModalFromScan('server', {ip: '${u.ip}', port: 5900, name: ${JSON.stringify(u.name || ('VNC ' + u.ip)).replace(/"/g, '&quot;')}})" style="padding: 7px 16px; font-size: 12px; white-space: nowrap;">
+                        <i class="fas fa-plus"></i> Добавить
+                    </button>
+                </div>
             `;
         }
 
@@ -2988,6 +3077,12 @@
             }
             if (device.page_count) {
                 infoParts.push(`С:${device.page_count}`);
+            }
+
+            if (device.serial) infoParts.push(`S/N: ${escapeHtml(device.serial)}`);
+            if (device.mac) infoParts.push(device.mac);
+            if (device.notes && device.notes.length) {
+                infoParts.push(`<span style="color: var(--warning, #e6a23c);">${escapeHtml(device.notes.join(', '))}</span>`);
             }
 
             return `
@@ -3130,6 +3225,83 @@
             }
         }
 
+        async function addAllScannedDevices() {
+            const pending = scanResults.filter(d => !(devices || []).some(x => x.ip === d.ip && x.type === d.type));
+            if (!pending.length) {
+                showNotification('Все найденные устройства уже добавлены', 'success');
+                return;
+            }
+            const btn = document.getElementById('scanAddAllBtn');
+            if (btn) btn.disabled = true;
+            let added = 0, failed = 0;
+            for (const device of pending) {
+                try {
+                    await addScannedDevice(device.type, device);
+                    added += 1;
+                } catch (e) {
+                    failed += 1;
+                }
+            }
+            if (btn) btn.disabled = false;
+            showNotification(failed ? `Добавлено: ${added}, ошибок: ${failed}` : `Добавлено: ${added}`, failed ? 'error' : 'success');
+            displayScanResults();
+        }
+
+        function exportScanCsv() {
+            if (!scanResults.length && !scanUnrecognized.length) {
+                showNotification('Нет результатов для экспорта', 'error');
+                return;
+            }
+            const cell = v => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+            const lines = ['Type,Name,IP,Port,MAC,Protocols,Model,Serial,Manufacturer,Web,RTSP,Notes'];
+            scanResults.forEach(d => lines.push([
+                cell(d.type), cell(d.name), cell(d.ip), cell(d.port || ''), cell(d.mac || ''),
+                cell((d.protocols || []).join(' ')), cell(d.model || ''), cell(d.serial || ''),
+                cell(d.manufacturer || ''), cell(d.web_interface || ''), cell(d.rtsp_url || ''),
+                cell((d.notes || []).join('; '))
+            ].join(',')));
+            scanUnrecognized.forEach(u => lines.push([
+                cell('unknown'), cell(u.name || ''), cell(u.ip), cell((u.ports || []).join(' ')), cell(u.mac || ''),
+                cell((u.ports || []).map(p => ':' + p).join(' ')), cell(''), cell(''), cell(''),
+                cell(''), cell(''), cell((u.notes || []).join('; '))
+            ].join(',')));
+            const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `scan-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showNotification('Экспорт завершен', 'success');
+        }
+
+        function saveLastScan(range, results, unrecognized) {
+            try {
+                localStorage.setItem('lastScan', JSON.stringify({
+                    range: range,
+                    ts: Date.now(),
+                    results: results || [],
+                    unrecognized: unrecognized || []
+                }));
+            } catch (e) { /* localStorage может быть переполнен — история не критична */ }
+        }
+
+        function restoreLastScan() {
+            if (scanResults.length || scanUnrecognized.length) return;
+            try {
+                const saved = JSON.parse(localStorage.getItem('lastScan') || 'null');
+                if (!saved || !Array.isArray(saved.results)) return;
+                if (!saved.results.length && !(saved.unrecognized || []).length) return;
+                scanResults = saved.results;
+                scanUnrecognized = saved.unrecognized || [];
+                const rangeInput = document.getElementById('scanRange');
+                if (rangeInput && saved.range) rangeInput.value = saved.range;
+                displayScanResults();
+            } catch (e) { /* повреждённая запись — игнорируем */ }
+        }
+
         function renderAllGroupsPage() {
             const treeContainer = document.getElementById('allGroupsTree');
             const emptyState = document.getElementById('allGroupsEmpty');
@@ -3259,6 +3431,21 @@
             applyRdStatus();
         }
 
+        function renderDeviceIps(device) {
+            // Основной адрес + доп. адреса (мелким шрифтом, полный список в title)
+            const list = [`${device.ip}${device.port ? ':' + device.port : ''}`];
+            const alts = device.alts || [];
+            alts.forEach(a => list.push(`${a.ip}:${a.port}`));
+            const titleAttr = alts.length
+                ? ` title="${escapeHtml(list.join(', ')).replace(/"/g, '&quot;')}"`
+                : '';
+            let html = `<div style="font-size: 13px;"${titleAttr}>${escapeHtml(list[0])}</div>`;
+            for (const a of alts) {
+                html += `<div style="font-size: 11px; opacity: 0.7;">${escapeHtml(a.ip)}:${a.port}</div>`;
+            }
+            return html;
+        }
+
         function _renderDeviceTableRow(device) {
             const status = device.status || 'offline';
             const fav = `<button class="favorite-btn ${device.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${device.id}, '${device.type}', ${device.is_favorite ? 'false' : 'true'})"><i class="fas fa-star"></i></button>`;
@@ -3312,16 +3499,16 @@
                             ${fav}
                         </div>
                     </td>
-                    <td>
-                        <div style="font-size: 13px;">${escapeHtml(device.ip)}${device.port ? `:${device.port}` : ''}</div>
-                    </td>
-                    <td>
-                        <span class="status-badge status-${status}">
-                            <span class="status-dot"></span>
-                            ${status === 'online' ? 'Онлайн' : 'Офлайн'}
-                        </span>
-                    </td>
-                    <td>
+                        <td>
+                            ${renderDeviceIps(device)}
+                        </td>
+                        <td>
+                            <span class="status-badge status-${status}">
+                                <span class="status-dot"></span>
+                                ${status === 'online' ? 'Онлайн' : 'Офлайн'}
+                            </span>
+                        </td>
+                        <td>
                         ${device.group_name ? `
                             <div class="group-badge">
                                 <div class="group-color" style="background: ${device.group_color}"></div>
@@ -3439,7 +3626,7 @@
                 return `
                     <tr>
                         <td>
-                            <div style="font-size: 13px;">${escapeHtml(device.ip)}</div>
+                            ${renderDeviceIps(device)}
                         </td>
                         <td>${icon}</td>
                         <td>
@@ -3505,6 +3692,7 @@
 
         function renderSettingsPage() {
             const settingsContent = document.getElementById('settingsContent');
+            if (!settingsContent) return;
             
             settingsContent.innerHTML = `
                 <div style="padding: 20px;">
@@ -3521,7 +3709,7 @@
                         
                         <div class="form-group">
                             <label class="form-label">Тема оформления</label>
-                            <select id="themeSelect" class="form-input form-select">
+                            <select id="legacyThemeSelect" class="form-input form-select">
                                 <option value="light">Светлая</option>
                                 <option value="dark">Темная</option>
                                 <option value="auto">Автоматически (системная)</option>
@@ -3777,7 +3965,7 @@
                         loadSubnetNames();
                         // Обновляем текущую страницу
                         if (currentPage === 'settings') {
-                            renderSettingsPage();
+                            loadSettings();
                         } else {
                             renderDevices();
                         }
@@ -3833,7 +4021,8 @@
                 
                 // Поиск
                 if (searchTerm) {
-                    const searchText = (device.name + ' ' + device.ip + ' ' + (device.comment || '')).toLowerCase();
+                    const altText = (device.alts || []).map(a => a.ip).join(' ');
+            const searchText = (device.name + ' ' + device.ip + ' ' + altText + ' ' + (device.comment || '')).toLowerCase();
                     if (!searchText.includes(searchTerm)) return false;
                 }
                 
@@ -4133,8 +4322,7 @@
                             ${favoriteBtn}
                         </td>
                         <td>
-                            <div style="font-weight: 500;">${device.ip}</div>
-                            ${device.port ? `<div style="font-size: 11px; opacity: 0.7;">Порт: ${device.port}</div>` : ''}
+                            ${renderDeviceIps(device)}
                         </td>
                         <td>
                             <span class="status-badge status-${status}">
@@ -4208,7 +4396,8 @@
             return devices.filter(d => {
                 if (d.type !== 'camera' || !d.is_favorite) return false;
                 if (searchTerm) {
-                    const searchText = (d.name + ' ' + d.ip + ' ' + (d.comment || '')).toLowerCase();
+                    const altText = (d.alts || []).map(a => a.ip).join(' ');
+            const searchText = (d.name + ' ' + d.ip + ' ' + altText + ' ' + (d.comment || '')).toLowerCase();
                     if (!searchText.includes(searchTerm)) return false;
                 }
                 return true;
@@ -4531,7 +4720,7 @@
                                                     <span style="font-weight:600; font-size:13px;">${escapeHtml(d.name)}</span>
                                                     <button class="favorite-btn ${d.is_favorite ? 'active' : ''}" onclick="event.stopPropagation(); toggleFavorite(${d.id}, &quot;${d.type}&quot;, ${d.is_favorite ? 'false' : 'true'})"><i class="fas fa-star"></i></button>
                                                 </div>
-                                                <div style="font-size:12px; opacity:0.75;">${escapeHtml(d.ip)}${d.port ? `:${d.port}` : ''}</div>
+                                                <div style="font-size:12px; opacity:0.75;">${renderDeviceIps(d)}</div>
                                             </div>
                                             <div class="device-actions" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap; justify-content:flex-end;">
                                                 <button class="action-btn" onclick="event.stopPropagation(); showMoveDeviceModal(${d.id}, &quot;${d.type}&quot;, ${group.id})">
@@ -4803,6 +4992,61 @@
             }
         }
         
+        function addServerAltRow(ip = '', port = '') {
+            const row = document.createElement('div');
+            row.className = 'server-alt-row';
+            row.style.cssText = 'display: flex; gap: 12px; align-items: center; margin-top: 8px;';
+
+            const ipWrap = document.createElement('div');
+            ipWrap.style.flex = '2';
+            const ipInput = document.createElement('input');
+            ipInput.type = 'text';
+            ipInput.className = 'form-input server-alt-ip';
+            ipInput.placeholder = '192.168.1.101';
+            ipInput.value = ip || '';
+            ipWrap.appendChild(ipInput);
+
+            const portWrap = document.createElement('div');
+            portWrap.style.flex = '1';
+            const portInput = document.createElement('input');
+            portInput.type = 'number';
+            portInput.className = 'form-input server-alt-port';
+            portInput.placeholder = '5900';
+            portInput.value = port || '';
+            portWrap.appendChild(portInput);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.type = 'button';
+            removeBtn.className = 'btn-icon';
+            removeBtn.title = 'Удалить адрес';
+            removeBtn.innerHTML = '<i class="fas fa-times"></i>';
+            removeBtn.addEventListener('click', () => row.remove());
+
+            row.appendChild(ipWrap);
+            row.appendChild(portWrap);
+            row.appendChild(removeBtn);
+            document.getElementById('serverAltRows').appendChild(row);
+        }
+
+        function clearServerAltRows() {
+            document.getElementById('serverAltRows').innerHTML = '';
+        }
+
+        function collectServerAlts() {
+            const rows = document.querySelectorAll('#serverAltRows .server-alt-row');
+            const alts = [];
+            for (const row of rows) {
+                const ip = row.querySelector('.server-alt-ip').value.trim();
+                const portRaw = row.querySelector('.server-alt-port').value.trim();
+                if (!ip && !portRaw) continue;
+                if (!ip) return { error: 'Введите IP дополнительного адреса' };
+                const port = parseInt(portRaw, 10) || parseInt(document.getElementById('serverPort').value, 10) || 5900;
+                if (port < 1 || port > 65535) return { error: `Некорректный порт: ${port}` };
+                alts.push({ ip, port });
+            }
+            return { alts };
+        }
+
         function showDeviceModal(deviceId = null, type = null) {
             editingDeviceId = deviceId;
             editingDeviceType = type;
@@ -4813,6 +5057,7 @@
             const form = document.getElementById('deviceForm');
             
             form.reset();
+            clearServerAltRows();
             
             if (deviceId && type) {
                 title.textContent = 'Редактировать устройство';
@@ -4845,6 +5090,8 @@
                         document.getElementById('serverIp').value = device.ip;
                         document.getElementById('serverPort').value = device.port || 5900;
                         document.getElementById('serverRustdeskId').value = device.rustdesk_id || '';
+                        clearServerAltRows();
+                        (device.alts || []).forEach(a => addServerAltRow(a.ip, a.port));
                     } else if (type === 'printer') {
                         document.getElementById('printerIp').value = device.ip;
                         document.getElementById('printerInterface').value = device.web_interface || '';
@@ -4915,6 +5162,12 @@
                         showNotification('Введите IP адрес сервера', 'error');
                         return;
                     }
+                    const altResult = collectServerAlts();
+                    if (altResult.error) {
+                        showNotification(altResult.error, 'error');
+                        return;
+                    }
+                    data.alts = altResult.alts;
                 } else if (type === 'printer') {
                     data.ip = document.getElementById('printerIp').value.trim();
                     data.web_interface = document.getElementById('printerInterface').value.trim() || `http://${data.ip}`;
@@ -5827,7 +6080,7 @@
                 
                 // Устанавливаем значения в форме с проверками
                 const themeSelect = document.getElementById('themeSelect');
-                if (themeSelect) themeSelect.value = settings.theme || 'light';
+                if (themeSelect) themeSelect.value = document.body.getAttribute('data-theme') || settings.theme || 'light';
                 
                 const primaryColorInput = document.getElementById('primaryColorInput');
                 const primaryColorText = document.getElementById('primaryColorText');
@@ -6141,6 +6394,8 @@
             _clearDbOptions = {
                 clear_servers: document.getElementById('clearDbServers')?.checked !== false,
                 clear_printers: document.getElementById('clearDbPrinters')?.checked !== false,
+                clear_cameras: document.getElementById('clearDbCameras')?.checked !== false,
+                clear_routers: document.getElementById('clearDbRouters')?.checked !== false,
                 clear_groups: document.getElementById('clearDbGroups')?.checked !== false
             };
             closeModal();
@@ -6360,7 +6615,7 @@
                     
                     if (exportServers && exportData.servers) {
                         csvLines.push('=== SERVERS ===');
-                        csvLines.push('Name,IP,Port,Group,Status,Is Favorite,RustDesk ID,Comment');
+                        csvLines.push('Name,IP,Port,Group,Status,Is Favorite,RustDesk ID,Comment,Alt Addresses');
                         exportData.servers.forEach(server => {
                             csvLines.push([
                                 `"${server.name}"`,
@@ -6370,7 +6625,8 @@
                                 server.status,
                                 server.is_favorite ? 'Yes' : 'No',
                                 server.rustdesk_id || '',
-                                `"${server.comment || ''}"`
+                                `"${server.comment || ''}"`,
+                                `"${server.alts || ''}"`
                             ].join(','));
                         });
                         csvLines.push('');
@@ -6573,7 +6829,8 @@
                             status: values[4],
                             is_favorite: values[5] === 'Yes',
                             rustdesk_id: values[6],
-                            comment: values[7] || ''
+                            comment: values[7] || '',
+                            alts: values[8] || ''
                         });
                     } else if (currentSection === 'printers' && values.length >= 6) {
                         result.printers.push({

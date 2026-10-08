@@ -100,6 +100,7 @@ def export_data():
                 'last_seen': server.last_seen.isoformat() if server.last_seen else None,
                 'comment': server.comment,
                 'created_at': server.created_at.isoformat() if server.created_at else None,
+                'alts': server.alts or '',
                 'status': 'online' if server_statuses.get(server.id) else 'offline'
             })
         
@@ -214,6 +215,7 @@ def create_backup():
         } for g in Group.query.all()]
         servers = [{
             'id': s.id, 'name': s.name, 'ip': s.ip, 'port': s.port,
+            'alts': s.alts or '',
             'group_id': s.group_id, 'is_favorite': s.is_favorite,
             'comment': s.comment, 'rustdesk_id': s.rustdesk_id or '',
         } for s in Server.query.all()]

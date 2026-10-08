@@ -9,6 +9,40 @@ from services.device_fields import _apply_password
 from services.status_cache import _fetch_statuses_parallel
 
 bp = Blueprint('devices', __name__)
+
+
+def _parse_alts(data, main_ip, main_port):
+    """Нормализует доп. адреса из запроса: [(ip, port)] или None при ошибке.
+
+    Дубликаты внутри списка и совпадение с основным адресом вычищаются
+    в Server.parse_alts.
+    """
+    raw = data.get('alts')
+    if raw is None:
+        return []
+    if isinstance(raw, (list, tuple)):
+        for entry in raw:
+            if isinstance(entry, dict):
+                if not str(entry.get('ip') or '').strip():
+                    return None
+            elif not str(entry or '').strip():
+                return None
+    endpoints = Server.parse_alts(raw, main_port)
+    return [ep for ep in endpoints if ep != (main_ip, main_port)]
+
+
+def _alts_conflict(endpoints, exclude_id=None):
+    """Ищет адрес из endpoints, занятый другим сервером (ip или alts)."""
+    others = Server.query.all()
+    for other in others:
+        if exclude_id is not None and other.id == exclude_id:
+            continue
+        taken = set(other.all_endpoints())
+        for ep in endpoints:
+            if ep in taken:
+                return f'Адрес {ep[0]}:{ep[1]} уже используется сервером «{other.name}»'
+    return None
+
 # API для групп
 @bp.route('/api/groups', methods=['GET', 'POST'])
 def groups_api():
@@ -89,6 +123,7 @@ def get_servers():
             'comment': server.comment,
             'created_at': server.created_at.isoformat() if server.created_at else None,
             'rustdesk_id': server.rustdesk_id or '',
+            'alts': [{'ip': h, 'port': p} for h, p in server.alt_endpoints],
             'status': 'online' if statuses.get(server.id) else 'offline'
         }
         
@@ -113,11 +148,19 @@ def add_server():
     # Проверка на дубликат IP
     if Server.query.filter_by(ip=data['ip']).first():
         return jsonify({'error': 'IP адрес уже существует'}), 400
-    
+
+    alts = _parse_alts(data, data['ip'], port)
+    if alts is None:
+        return jsonify({'error': 'Некорректный дополнительный адрес'}), 400
+    conflict = _alts_conflict(alts)
+    if conflict:
+        return jsonify({'error': conflict}), 400
+
     server = Server(
         name=data['name'],
         ip=data['ip'],
         port=port,
+        alts=Server.dumps_alts(alts),
         group_id=data.get('group_id'),
         comment=data.get('comment', ''),
         rustdesk_id=(data.get('rustdesk_id') or '').strip(),
@@ -135,21 +178,37 @@ def server_api(server_id):
     
     if request.method == 'PUT':
         data = get_json()
-        
+
         # Проверка на дубликат IP при изменении
         if 'ip' in data and data['ip'] != server.ip:
             if Server.query.filter_by(ip=data['ip']).first():
                 return jsonify({'error': 'IP адрес уже существует'}), 400
-        
+
+        # Итоговые основной адрес/порт — до разбора alts (порт по умолчанию)
+        new_ip = data.get('ip', server.ip)
+        new_port = server.port
+        if 'port' in data:
+            port = _normalize_port(data['port'])
+            if port is None:
+                return jsonify({'error': 'Порт должен быть числом от 1 до 65535'}), 400
+            new_port = port
+
+        alts = server.alt_endpoints
+        if 'alts' in data:
+            alts = _parse_alts(data, new_ip, new_port)
+            if alts is None:
+                return jsonify({'error': 'Некорректный дополнительный адрес'}), 400
+        conflict = _alts_conflict(alts, exclude_id=server.id)
+        if conflict:
+            return jsonify({'error': conflict}), 400
+
         if 'name' in data:
             server.name = data['name']
         if 'ip' in data:
             server.ip = data['ip']
         if 'port' in data:
-            port = _normalize_port(data['port'])
-            if port is None:
-                return jsonify({'error': 'Порт должен быть числом от 1 до 65535'}), 400
-            server.port = port
+            server.port = new_port
+        server.alts = Server.dumps_alts(alts)
         if 'group_id' in data:
             server.group_id = data['group_id']
         if 'comment' in data:
@@ -158,7 +217,7 @@ def server_api(server_id):
             server.is_favorite = bool(data['is_favorite'])
         if 'rustdesk_id' in data:
             server.rustdesk_id = (data['rustdesk_id'] or '').strip()
-        
+
         db.session.commit()
         return jsonify({'success': True})
     

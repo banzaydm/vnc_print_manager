@@ -17,6 +17,7 @@ from services.novnc_core import (
     _novnc_lock, _novnc_tokens,
     _prune_novnc_tokens_locked, _write_novnc_token_file_locked,
 )
+from services.status_cache import pick_reachable_endpoint
 
 bp = Blueprint('vnc', __name__)
 
@@ -88,7 +89,10 @@ def connect_vnc(server_id):
     server = Server.query.get(server_id)
     if not server:
         return jsonify({'success': False, 'message': 'Сервер не найден'}), 404
-    
+
+    # Если основной адрес недоступен, а запасной жив — подключаемся по запасному
+    host, port = pick_reachable_endpoint(server.ip, server.port, server.alt_endpoints)
+
     vnc_path, client_name = find_vnc_client()
     
     if not vnc_path:
@@ -101,29 +105,29 @@ def connect_vnc(server_id):
                 '- RealVNC Viewer: https://www.realvnc.com/en/connect/download/viewer/',
                 '',
                 'Или подключитесь вручную:',
-                f'Адрес: {server.ip}:{server.port}'
+                f'Адрес: {host}:{port}'
             ]
         })
     
     try:
         if platform.system() == 'Darwin':
             if 'Screen Sharing' in vnc_path:
-                subprocess.Popen(['open', f"vnc://{server.ip}:{server.port}"])
+                subprocess.Popen(['open', f"vnc://{host}:{port}"])
             else:
-                subprocess.Popen([vnc_path, f"{server.ip}:{server.port}"])
+                subprocess.Popen([vnc_path, f"{host}:{port}"])
         else:
-            subprocess.Popen([vnc_path, f"{server.ip}:{server.port}"])
+            subprocess.Popen([vnc_path, f"{host}:{port}"])
         
         return jsonify({
             'success': True,
-            'message': f'Открываю подключение к {server.ip}:{server.port} через {client_name}'
+            'message': f'Открываю подключение к {host}:{port} через {client_name}'
         })
         
     except Exception as e:
         return jsonify({
             'success': False,
             'message': f'Ошибка при запуске VNC клиента: {str(e)}',
-            'manual_connection': f"Вы можете подключиться вручную: {server.ip}:{server.port}"
+            'manual_connection': f"Вы можете подключиться вручную: {host}:{port}"
         })
 
 
@@ -141,9 +145,12 @@ def novnc_token(server_id):
     now = time.time()
     expires_at = now + NOVNC_TOKEN_TTL_SECONDS
 
+    # Токен мапится на живой адрес (основной или запасной)
+    host, port = pick_reachable_endpoint(server.ip, server.port, server.alt_endpoints)
+
     with _novnc_lock:
         _prune_novnc_tokens_locked(now)
-        _novnc_tokens[token] = (server.ip, server.port, expires_at)
+        _novnc_tokens[token] = (host, port, expires_at)
         _write_novnc_token_file_locked()
 
     return jsonify(
@@ -152,7 +159,7 @@ def novnc_token(server_id):
             "token": token,
             "proxy_port": NOVNC_PROXY_PORT,
             "expires_in_seconds": NOVNC_TOKEN_TTL_SECONDS,
-            "server": {"id": server.id, "name": server.name, "ip": server.ip, "port": server.port},
+            "server": {"id": server.id, "name": server.name, "ip": host, "port": port},
         }
     )
 
