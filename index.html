@@ -1289,6 +1289,10 @@
                         <i class="fas fa-tv"></i>
                         <span>RustDesk</span>
                     </button>
+                    <button class="nav-tab" data-page="matrix">
+                        <i class="fas fa-comments"></i>
+                        <span>Matrix</span>
+                    </button>
                 </div>
             </div>
             
@@ -1612,6 +1616,34 @@
                             </div>
                         </div>
 
+                        <div class="settings-section">
+                            <h3 style="margin-bottom: 20px; color: var(--text-primary);">Matrix</h3>
+
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Адрес homeserver (Synapse)</label>
+                                <input type="text" id="matrixHsUrlInput" class="form-input" placeholder="http://192.168.17.250:8008">
+                                <small style="display: block; margin-top: 6px; opacity: 0.7; font-size: 12px;">
+                                    Базовый URL Matrix-сервера. Используется для вкладки «Matrix».
+                                </small>
+                            </div>
+
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Логин администратора Matrix</label>
+                                <input type="text" id="matrixAdminUserInput" class="form-input" placeholder="admin" autocomplete="off">
+                                <small style="display: block; margin-top: 6px; opacity: 0.7; font-size: 12px;">
+                                    Пользователь с правами администратора сервера (например admin → @admin:домен).
+                                </small>
+                            </div>
+
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Пароль администратора Matrix</label>
+                                <input type="password" id="matrixAdminPassInput" class="form-input" placeholder="Пароль" autocomplete="off">
+                                <small style="display: block; margin-top: 6px; opacity: 0.7; font-size: 12px;">
+                                    Пароль не отображается. Оставьте поле пустым при сохранении, чтобы не менять текущий пароль.
+                                </small>
+                            </div>
+                        </div>
+
                         <div class="settings-section" id="usersSection" style="display: none;">
                             <h3 style="margin-bottom: 20px; color: var(--text-primary);">Пользователи</h3>
 
@@ -1813,7 +1845,121 @@
                     </div>
                 </div>
             </div>
+
+            <!-- Контейнер для страницы Matrix -->
+            <div id="matrixContainer" style="display: none;">
+                <div class="table-container">
+                    <div class="table-header">
+                        <h2>Matrix пользователи</h2>
+                        <div style="display: flex; align-items: center; gap: 10px;">
+                            <div class="table-stats" id="matrixStats">—</div>
+                            <input type="text" id="matrixSearch" class="form-input" placeholder="Поиск по логину или имени" style="width: 210px; height: 36px; margin: 0;">
+                            <button class="btn" id="matrixCreateBtn">
+                                <i class="fas fa-user-plus"></i>
+                                <span>Создать</span>
+                            </button>
+                            <button class="btn" id="matrixRefreshBtn">
+                                <i class="fas fa-sync"></i>
+                                <span>Обновить</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="table-wrapper">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Статус</th>
+                                    <th>Пользователь</th>
+                                    <th>Имя</th>
+                                    <th>Роль</th>
+                                    <th>Создан</th>
+                                    <th>Был(а) последний раз</th>
+                                    <th>Действия</th>
+                                </tr>
+                            </thead>
+                            <tbody id="matrixTable">
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div id="matrixEmpty" class="empty-state" style="display: none;">
+                        <div class="empty-icon"><i class="fas fa-comments"></i></div>
+                        <h3 class="empty-title">Пользователей нет</h3>
+                        <p class="empty-description">Создайте первого пользователя кнопкой «Создать».</p>
+                    </div>
+
+                    <div id="matrixError" class="empty-state" style="display: none;">
+                        <div class="empty-icon"><i class="fas fa-exclamation-triangle"></i></div>
+                        <h3 class="empty-title">Не удалось загрузить список</h3>
+                        <p class="empty-description" id="matrixErrorMsg"></p>
+                    </div>
+                </div>
+            </div>
         </main>
+    </div>
+
+    <!-- Модальное окно создания пользователя Matrix -->
+    <div id="matrixCreateModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Создать пользователя Matrix</h3>
+                <button class="modal-close" onclick="document.getElementById('matrixCreateModal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Логин (localpart)</label>
+                    <input type="text" id="matrixCreateLogin" class="form-input" placeholder="ivanov" autocomplete="off">
+                    <small style="opacity: 0.6; font-size: 12px; margin-top: 4px; display: block;">
+                        Строчные латинские буквы и цифры, точка, _ - =. Полный ID будет @логин:домен.
+                    </small>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Отображаемое имя</label>
+                    <input type="text" id="matrixCreateName" class="form-input" placeholder="Иванов Иван">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Пароль</label>
+                    <input type="text" id="matrixCreatePass" class="form-input" placeholder="Оставьте пустым — сгенерировать" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="matrixCreateAdmin"> Администратор сервера
+                    </label>
+                </div>
+                <div id="matrixCreateResult" style="display: none; margin-top: 10px; padding: 10px; border-radius: 8px; background: rgba(16,185,129,.12); color: #10b981; font-size: 13px;">
+                    Пользователь создан. Пароль: <code id="matrixCreateResultPass"></code>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="matrixCreateCancel">Закрыть</button>
+                <button class="btn btn-primary" id="matrixCreateSubmit">Создать</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модальное окно смены пароля Matrix -->
+    <div id="matrixPassModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Смена пароля</h3>
+                <button class="modal-close" onclick="document.getElementById('matrixPassModal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Пользователь</label>
+                    <div id="matrixPassUser" style="font-family: monospace; opacity: 0.85;"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Новый пароль</label>
+                    <input type="text" id="matrixPassInput" class="form-input" placeholder="Минимум 8 символов" autocomplete="off">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="matrixPassCancel">Отмена</button>
+                <button class="btn btn-primary" id="matrixPassSubmit">Сохранить</button>
+            </div>
+        </div>
     </div>
 
     <!-- Модальное окно устройства -->
@@ -2216,8 +2362,8 @@
 
     <script>
         // Версия приложения
-        const APP_VERSION = '1.0.4';
-        const APP_VERSION_DATE = '08.10.2026';
+        const APP_VERSION = '1.0.5';
+        const APP_VERSION_DATE = '09.10.2026';
 
         // Автоматически добавляем API-ключ ко всем запросам /api/*
         const _originalFetch = window.fetch.bind(window);
@@ -2800,6 +2946,7 @@
             document.getElementById('subnetsContainer').style.display = 'none';
             document.getElementById('scanContainer').style.display = 'none';
             document.getElementById('rustdeskContainer').style.display = 'none';
+            document.getElementById('matrixContainer').style.display = 'none';
             document.getElementById('settingsContainer').style.display = 'none';
             document.getElementById('cameraWallContainer').style.display = 'none';
             
@@ -2836,6 +2983,10 @@
                 // Показываем страницу RustDesk
                 document.getElementById('rustdeskContainer').style.display = 'block';
                 loadRustdeskDevices();
+            } else if (page === 'matrix') {
+                // Показываем страницу Matrix
+                document.getElementById('matrixContainer').style.display = 'block';
+                loadMatrixUsers();
             } else {
                 // Показываем страницу устройств
                 document.getElementById('devicesControls').style.display = 'flex';
@@ -5755,6 +5906,214 @@
             }
         }
 
+        // ---- Matrix: админка пользователей Synapse ----------------------
+        let matrixLoading = false;
+        let matrixUsers = [];
+
+        function matrixFormatTs(ms) {
+            if (!ms) return '—';
+            const d = new Date(ms);
+            if (isNaN(d.getTime())) return '—';
+            const pad = n => String(n).padStart(2, '0');
+            return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}.${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+        }
+
+        async function loadMatrixUsers() {
+            if (matrixLoading) return;
+            matrixLoading = true;
+            const tbody = document.getElementById('matrixTable');
+            const stats = document.getElementById('matrixStats');
+            const emptyBox = document.getElementById('matrixEmpty');
+            const errBox = document.getElementById('matrixError');
+            const errMsg = document.getElementById('matrixErrorMsg');
+            const refreshBtn = document.getElementById('matrixRefreshBtn');
+            if (refreshBtn) {
+                refreshBtn.disabled = true;
+                const icon = refreshBtn.querySelector('i');
+                if (icon) icon.classList.add('fa-spin');
+            }
+            try {
+                const response = await fetch('/api/matrix/users');
+                let data = null;
+                try {
+                    data = await response.json();
+                } catch (e) {
+                    data = null;
+                }
+                if (!response.ok || !data || !data.success) {
+                    const message = (data && data.error) ? data.error : ('HTTP ' + response.status);
+                    if (errMsg) errMsg.textContent = message;
+                    if (errBox) errBox.style.display = 'block';
+                    if (tbody) tbody.innerHTML = '';
+                    if (emptyBox) emptyBox.style.display = 'none';
+                    if (stats) stats.textContent = '—';
+                    return;
+                }
+                matrixUsers = data.users || [];
+                if (errBox) errBox.style.display = 'none';
+                renderMatrixUsers(data);
+            } catch (error) {
+                console.error('Ошибка загрузки Matrix:', error);
+                if (errMsg) errMsg.textContent = error.message || 'Неизвестная ошибка';
+                if (errBox) errBox.style.display = 'block';
+                if (emptyBox) emptyBox.style.display = 'none';
+                if (stats) stats.textContent = '—';
+            } finally {
+                matrixLoading = false;
+                if (refreshBtn) {
+                    refreshBtn.disabled = false;
+                    const icon = refreshBtn.querySelector('i');
+                    if (icon) icon.classList.remove('fa-spin');
+                }
+            }
+        }
+
+        function renderMatrixUsers(data) {
+            const tbody = document.getElementById('matrixTable');
+            const emptyBox = document.getElementById('matrixEmpty');
+            const stats = document.getElementById('matrixStats');
+            const query = (document.getElementById('matrixSearch')?.value || '').trim().toLowerCase();
+            const users = matrixUsers.filter(u => {
+                if (!query) return true;
+                return (u.user_id || '').toLowerCase().includes(query) ||
+                       (u.displayname || '').toLowerCase().includes(query);
+            });
+            if (stats) {
+                const online = data ? data.online : matrixUsers.filter(u => u.online).length;
+                const day = data ? data.active_24h : matrixUsers.filter(u => u.active_24h).length;
+                stats.textContent = `${matrixUsers.length} польз. · онлайн ${online} · за 24ч ${day}`;
+            }
+            if (!tbody) return;
+            if (users.length === 0) {
+                tbody.innerHTML = '';
+                if (emptyBox) emptyBox.style.display = 'block';
+                return;
+            }
+            if (emptyBox) emptyBox.style.display = 'none';
+            tbody.innerHTML = users.map(u => {
+                const idx = matrixUsers.indexOf(u);
+                const status = u.deactivated
+                    ? '<span class="status-dot" style="background:#6b7280;"></span><span style="color:#9ca3af;">Отключён</span>'
+                    : (u.online
+                        ? '<span class="status-dot" style="background:#10b981;"></span><span style="color:#10b981;">Онлайн</span>'
+                        : '<span class="status-dot" style="background:#6b7280;"></span><span style="color:#9ca3af;">Оффлайн</span>');
+                const role = u.admin
+                    ? '<span style="color:#f59e0b;"><i class="fas fa-shield-alt"></i> Админ</span>'
+                    : 'Пользователь';
+                let actions = `<button class="btn btn-sm" onclick="matrixResetPassword(${idx})">Пароль</button> `;
+                if (u.deactivated) {
+                    actions += `<button class="btn btn-sm" onclick="matrixUserAction(${idx}, 'activate')">Включить</button>`;
+                } else {
+                    actions += `<button class="btn btn-sm" onclick="matrixUserAction(${idx}, 'deactivate')">Деактивировать</button>`;
+                }
+                return `<tr>
+                    <td>${status}</td>
+                    <td><code>${escapeHtml(u.user_id || '')}</code></td>
+                    <td>${escapeHtml(u.displayname || '—')}</td>
+                    <td>${role}</td>
+                    <td>${matrixFormatTs(u.creation_ts)}</td>
+                    <td>${matrixFormatTs(u.last_seen_ts)}</td>
+                    <td>${actions}</td>
+                </tr>`;
+            }).join('');
+        }
+
+        async function matrixUserAction(index, action, extra) {
+            const u = matrixUsers[index];
+            if (!u) return;
+            const label = u.displayname || u.user_id;
+            if (action === 'deactivate') {
+                if (!confirm(`Деактивировать пользователя «${label}»?\nОн потеряет доступ к Matrix.`)) return;
+            } else if (action === 'activate') {
+                if (!confirm(`Включить пользователя «${label}»?`)) return;
+            }
+            try {
+                const response = await fetch('/api/matrix/users/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: u.user_id, action: action, password: extra })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification('Готово', 'success');
+                    await loadMatrixUsers();
+                } else {
+                    showNotification(result.error || 'Ошибка', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        function matrixResetPassword(index) {
+            const u = matrixUsers[index];
+            if (!u) return;
+            const modal = document.getElementById('matrixPassModal');
+            document.getElementById('matrixPassUser').textContent = u.user_id;
+            document.getElementById('matrixPassInput').value = '';
+            modal.dataset.userIndex = String(index);
+            modal.classList.add('active');
+        }
+
+        async function matrixSavePassword() {
+            const modal = document.getElementById('matrixPassModal');
+            const idx = parseInt(modal.dataset.userIndex || '-1', 10);
+            const password = document.getElementById('matrixPassInput').value;
+            if (password.length < 8) {
+                showNotification('Пароль минимум 8 символов', 'error');
+                return;
+            }
+            await matrixUserAction(idx, 'password', password);
+            modal.classList.remove('active');
+        }
+
+        async function matrixCreateSubmit() {
+            const localpart = document.getElementById('matrixCreateLogin').value.trim();
+            const displayname = document.getElementById('matrixCreateName').value.trim();
+            const password = document.getElementById('matrixCreatePass').value;
+            const admin = document.getElementById('matrixCreateAdmin').checked;
+            if (!localpart) {
+                showNotification('Укажите логин', 'error');
+                return;
+            }
+            try {
+                const response = await fetch('/api/matrix/users', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ localpart, displayname, password, admin })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    const box = document.getElementById('matrixCreateResult');
+                    document.getElementById('matrixCreateResultPass').textContent = result.password;
+                    box.style.display = 'block';
+                    showNotification(`Пользователь ${result.user_id} создан`, 'success');
+                    document.getElementById('matrixCreateLogin').value = '';
+                    document.getElementById('matrixCreateName').value = '';
+                    document.getElementById('matrixCreatePass').value = '';
+                    document.getElementById('matrixCreateAdmin').checked = false;
+                    await loadMatrixUsers();
+                } else {
+                    showNotification(result.error || 'Ошибка создания', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        document.getElementById('matrixRefreshBtn')?.addEventListener('click', loadMatrixUsers);
+        document.getElementById('matrixCreateBtn')?.addEventListener('click', () => {
+            document.getElementById('matrixCreateResult').style.display = 'none';
+            document.getElementById('matrixCreateModal').classList.add('active');
+        });
+        document.getElementById('matrixSearch')?.addEventListener('input', () => renderMatrixUsers());
+        document.getElementById('matrixCreateSubmit')?.addEventListener('click', matrixCreateSubmit);
+        document.getElementById('matrixPassSubmit')?.addEventListener('click', matrixSavePassword);
+        document.getElementById('matrixCreateCancel')?.addEventListener('click', () =>
+            document.getElementById('matrixCreateModal').classList.remove('active'));
+        document.getElementById('matrixPassCancel')?.addEventListener('click', () =>
+            document.getElementById('matrixPassModal').classList.remove('active'));
+
         // ---- Статусы RustDesk на кнопках «Подключиться» ------------------
         // Точка: зелёная — онлайн, красная — офлайн, серая — ID не указан
         // или панель RustDesk не настроена. Опрос раз в 45 секунд, состояние
@@ -6101,6 +6460,12 @@
                 if (rdApiUserInput) rdApiUserInput.value = settings.rustdesk_api_user || '';
                 // Пароль панели не возвращается сервером — оставляем поле пустым
 
+                const matrixHsUrlInput = document.getElementById('matrixHsUrlInput');
+                if (matrixHsUrlInput) matrixHsUrlInput.value = settings.matrix_hs_url || '';
+                const matrixAdminUserInput = document.getElementById('matrixAdminUserInput');
+                if (matrixAdminUserInput) matrixAdminUserInput.value = settings.matrix_admin_user || '';
+                // Пароль администратора Matrix не возвращается сервером
+
                 const apiKeyInput = document.getElementById('apiKeyInput');
                 if (apiKeyInput) apiKeyInput.value = localStorage.getItem('vnc_api_key') || '';
                 
@@ -6170,6 +6535,13 @@
                 if (rdApiUrlInput) settings.rustdesk_api_url = rdApiUrlInput.value.trim();
                 if (rdApiUserInput) settings.rustdesk_api_user = rdApiUserInput.value.trim();
                 if (rdApiPassInput && rdApiPassInput.value) settings.rustdesk_api_pass = rdApiPassInput.value;
+
+                const matrixHsUrlInput = document.getElementById('matrixHsUrlInput');
+                const matrixAdminUserInput = document.getElementById('matrixAdminUserInput');
+                const matrixAdminPassInput = document.getElementById('matrixAdminPassInput');
+                if (matrixHsUrlInput) settings.matrix_hs_url = matrixHsUrlInput.value.trim();
+                if (matrixAdminUserInput) settings.matrix_admin_user = matrixAdminUserInput.value.trim();
+                if (matrixAdminPassInput && matrixAdminPassInput.value) settings.matrix_admin_pass = matrixAdminPassInput.value;
                 
                 const response = await fetch('/api/settings', {
                     method: 'POST',

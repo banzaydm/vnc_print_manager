@@ -137,7 +137,7 @@ def get_settings():
     result = {}
     for setting in settings:
         # Секреты не отдаём клиенту в открытом виде
-        if setting.key == 'rustdesk_api_pass':
+        if setting.key in ('rustdesk_api_pass', 'matrix_admin_pass'):
             result[setting.key] = ''
             continue
         # Преобразуем значение в соответствии с типом
@@ -160,7 +160,7 @@ def update_settings():
         
         for key, value in data.items():
             # Пустой пароль не перезаписываем (клиент не получает текущее значение)
-            if key == 'rustdesk_api_pass' and not str(value):
+            if key in ('rustdesk_api_pass', 'matrix_admin_pass') and not str(value):
                 continue
             setting = Settings.query.filter_by(key=key).first()
             

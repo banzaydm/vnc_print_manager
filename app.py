@@ -13,6 +13,7 @@ from blueprints.data import bp as data_bp
 from blueprints.devices import bp as devices_bp
 from blueprints.streams import bp as streams_bp
 from blueprints.rustdesk import bp as rustdesk_bp
+from blueprints.matrix import bp as matrix_bp
 from blueprints.scan import bp as scan_bp
 from blueprints.vnc import bp as vnc_bp
 
@@ -334,6 +335,7 @@ app.register_blueprint(data_bp)
 app.register_blueprint(devices_bp)
 app.register_blueprint(streams_bp)
 app.register_blueprint(rustdesk_bp)
+app.register_blueprint(matrix_bp)
 app.register_blueprint(scan_bp)
 app.register_blueprint(vnc_bp)
 
