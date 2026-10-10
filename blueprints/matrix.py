@@ -71,3 +71,19 @@ def matrix_user_update():
         return jsonify({'success': True})
     except matrix_service.MatrixError as e:
         return _err(e)
+
+
+@bp.route('/api/matrix/broadcast', methods=['POST'])
+def matrix_broadcast():
+    """Рассылка сообщения: mode=dm (личные) или mode=room (общий рум)."""
+    if not matrix_service.configured():
+        return jsonify({'success': False, 'configured': False,
+                        'error': 'Matrix не настроен.'}), 400
+    data = get_json()
+    try:
+        res = matrix_service.send_broadcast(
+            data.get('message'), data.get('mode') or 'dm',
+            data.get('users'))
+        return jsonify({'success': True, **res})
+    except matrix_service.MatrixError as e:
+        return _err(e)

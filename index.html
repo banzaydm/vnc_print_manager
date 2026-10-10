@@ -1865,10 +1865,34 @@
                         </div>
                     </div>
 
+                    <div style="padding: 14px 24px; border-bottom: 1px solid var(--card-border);">
+                        <textarea id="matrixBroadcastText" class="form-input form-textarea" rows="2" placeholder="Сообщение для рассылки…" style="margin-bottom: 8px;"></textarea>
+                        <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
+                            <label style="display: flex; align-items: center; gap: 6px; margin: 0; cursor: pointer;">
+                                <input type="radio" name="matrixBroadcastMode" value="dm" checked>
+                                <span>Личные сообщения</span>
+                            </label>
+                            <label style="display: flex; align-items: center; gap: 6px; margin: 0; cursor: pointer;">
+                                <input type="radio" name="matrixBroadcastMode" value="room">
+                                <span>Общий рум</span>
+                            </label>
+                            <button class="btn btn-primary" id="matrixBroadcastSend">
+                                <i class="fas fa-paper-plane"></i>
+                                <span>Отправить</span>
+                            </button>
+                            <span id="matrixBroadcastStatus" style="font-size: 13px; color: var(--text-color); opacity: 0.75;"></span>
+                        </div>
+                        <div style="font-size: 12px; color: var(--text-color); opacity: 0.6; margin-top: 6px;">
+                            Отправка выбранным пользователям (галочки в таблице); если ничего не выбрано — всем активным.
+                            «Общий рум» — одна комната «Рассылка VNC Manager», участники приглашаются автоматически.
+                        </div>
+                    </div>
+
                     <div class="table-wrapper">
                         <table class="table">
                             <thead>
                                 <tr>
+                                    <th style="width: 34px;"><input type="checkbox" id="matrixSelectAll" title="Выбрать всех"></th>
                                     <th>Статус</th>
                                     <th>Пользователь</th>
                                     <th>Имя</th>
@@ -5909,6 +5933,7 @@
         // ---- Matrix: админка пользователей Synapse ----------------------
         let matrixLoading = false;
         let matrixUsers = [];
+        const matrixSelected = new Set();   // user_id, отмеченные для рассылки
 
         function matrixFormatTs(ms) {
             if (!ms) return '—';
@@ -6007,6 +6032,7 @@
                     actions += `<button class="btn btn-sm" onclick="matrixUserAction(${idx}, 'deactivate')">Деактивировать</button>`;
                 }
                 return `<tr>
+                    <td style="text-align: center;"><input type="checkbox" class="matrix-user-check" value="${escapeHtml(u.user_id || '')}" ${matrixSelected.has(u.user_id) ? 'checked' : ''}></td>
                     <td>${status}</td>
                     <td><code>${escapeHtml(u.user_id || '')}</code></td>
                     <td>${escapeHtml(u.displayname || '—')}</td>
@@ -6113,6 +6139,80 @@
             document.getElementById('matrixCreateModal').classList.remove('active'));
         document.getElementById('matrixPassCancel')?.addEventListener('click', () =>
             document.getElementById('matrixPassModal').classList.remove('active'));
+
+        // ---- Рассылка сообщений (вкладка Matrix) ---------------------------
+        function matrixToggleSelect(userId, checked) {
+            if (checked) matrixSelected.add(userId);
+            else matrixSelected.delete(userId);
+            const all = document.getElementById('matrixSelectAll');
+            const checks = document.querySelectorAll('.matrix-user-check');
+            if (all) all.checked = checks.length > 0 &&
+                Array.from(checks).every(cb => cb.checked);
+        }
+
+        document.getElementById('matrixTable')?.addEventListener('change', (e) => {
+            const cb = e.target.closest?.('.matrix-user-check');
+            if (cb) matrixToggleSelect(cb.value, cb.checked);
+        });
+
+        document.getElementById('matrixSelectAll')?.addEventListener('change', (e) => {
+            document.querySelectorAll('.matrix-user-check').forEach(cb => {
+                cb.checked = e.target.checked;
+                if (e.target.checked) matrixSelected.add(cb.value);
+                else matrixSelected.delete(cb.value);
+            });
+        });
+
+        async function matrixBroadcastSend() {
+            const textEl = document.getElementById('matrixBroadcastText');
+            const btn = document.getElementById('matrixBroadcastSend');
+            const status = document.getElementById('matrixBroadcastStatus');
+            const message = (textEl?.value || '').trim();
+            if (!message) {
+                showNotification('Введите сообщение для рассылки', 'error');
+                return;
+            }
+            const mode = document.querySelector('input[name="matrixBroadcastMode"]:checked')?.value || 'dm';
+            const users = Array.from(matrixSelected);
+            if (btn) btn.disabled = true;
+            if (status) status.textContent = 'Отправка…';
+            try {
+                const response = await fetch('/api/matrix/broadcast', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message, mode, users })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    let msg;
+                    if (mode === 'dm') {
+                        msg = `Отправлено ${result.sent} из ${result.total}` +
+                            (result.failed ? `, ошибок: ${result.failed}` : '');
+                    } else {
+                        msg = `В комнату «${result.room_name}» доставлено` +
+                            (result.invited ? `, приглашено: ${result.invited}` : '') +
+                            (result.failed ? `, ошибок: ${result.failed}` : '');
+                    }
+                    if (status) status.textContent = msg;
+                    showNotification(msg, 'success');
+                    if (result.errors && result.errors.length) {
+                        console.warn('Рассылка Matrix — ошибки:', result.errors);
+                    }
+                    if (textEl) textEl.value = '';
+                } else {
+                    const err = result.error || ('HTTP ' + response.status);
+                    if (status) status.textContent = 'Ошибка: ' + err;
+                    showNotification(err, 'error');
+                }
+            } catch (error) {
+                if (status) status.textContent = 'Ошибка соединения';
+                showNotification('Ошибка соединения', 'error');
+            } finally {
+                if (btn) btn.disabled = false;
+            }
+        }
+
+        document.getElementById('matrixBroadcastSend')?.addEventListener('click', matrixBroadcastSend);
 
         // ---- Статусы RustDesk на кнопках «Подключиться» ------------------
         // Точка: зелёная — онлайн, красная — офлайн, серая — ID не указан

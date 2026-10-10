@@ -18,8 +18,11 @@ from services.settings_store import _get_setting
 
 ONLINE_WINDOW = 180          # сек: «онлайн», если last_seen_ts свежее
 DEFAULT_HS_URL = 'http://192.168.17.250:8008'
-_USERS_PAGE = 200
-_LOCALPART_RE = re.compile(r'^[a-z0-9._=/-]{1,64}$')
+USERS_PAGE = 200
+LOCALPART_RE = re.compile(r'^[a-z0-9._=/-]{1,64}$')
+BROADCAST_ROOM_NAME = 'Рассылка VNC Manager'
+_SEND_DELAY = 0.2             # пауза между личными сообщениями (анти-рателIMIT)
+_INVITE_DELAY = 0.1
 
 _lock = threading.Lock()
 _tokens = {}  # (hs_url, admin_user) -> (token, server_name, expires_at)
@@ -161,7 +164,7 @@ def list_users():
         # deactivated=true/guests=true — иначе Synapse молча скрывает
         # деактивированных пользователей из списка
         out, server_name = _request(
-            f'/_synapse/admin/v2/users?from={offset}&limit={_USERS_PAGE}'
+            f'/_synapse/admin/v2/users?from={offset}&limit={USERS_PAGE}'
             '&order_by=name&deactivated=true&guests=true')
         batch = out.get('users') or []
         total = out.get('total', total)
@@ -202,7 +205,7 @@ def create_user(localpart, password=None, displayname='', admin=False):
     Возвращает user_id и пароль (сгенерированный — тоже).
     """
     localpart = (localpart or '').strip().lower()
-    if not _LOCALPART_RE.match(localpart or ''):
+    if not LOCALPART_RE.match(localpart or ''):
         raise MatrixError('Логин: строчные латинские буквы, цифры, . _ - = , '
                           'до 64 символов', 400)
     password = (password or '').strip() or secrets.token_urlsafe(12)
@@ -265,3 +268,169 @@ def list_rooms(limit=100):
     rooms.sort(key=lambda x: (-x['members'], x['name'] or x['room_id']))
     return {'rooms': rooms, 'total': out.get('total_rooms', len(rooms)),
             'server_name': server_name}
+
+
+# ---------------------------------------------------------------------------
+# Рассылка сообщений (вкладка Matrix): личные сообщения (DM) или общий рум
+# ---------------------------------------------------------------------------
+def _me_user_id(server_name):
+    admin_user = _cfg()[1]
+    if not server_name or not admin_user:
+        return admin_user
+    return admin_user if ':' in admin_user else f'{admin_user}:{server_name}'
+
+
+def _send_msg(room_id, text):
+    """Отправить m.room.message в комнату.
+
+    PUT (а не POST): на части сборок Synapse POST к /send/ отдаёт 405
+    M_UNRECOGNIZED; PUT — канонический метод по спеке (его использует Element)
+    и даёт идемпотентность по transaction id.
+    """
+    txn = secrets.token_hex(8)
+    _request(f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+             f'/send/m.room.message/{txn}', 'PUT',
+             {'msgtype': 'm.text', 'body': text})
+
+
+def _m_direct_path():
+    _token, server_name, _hs = _ensure_token()
+    return (f'/_matrix/client/v3/user/'
+            f'{_enc_user(_me_user_id(server_name))}/account_data/m.direct')
+
+
+def _get_m_direct():
+    """Книга DM: {user_id: [room_id, ...]} из account_data m.direct."""
+    out, _ = _request(_m_direct_path())
+    return out if isinstance(out, dict) else {}
+
+
+def _create_dm_room(other):
+    out, _ = _request('/_matrix/client/v3/createRoom', 'POST',
+                      {'invite': [other], 'preset': 'trusted_private_chat',
+                       'is_direct': True})
+    room_id = out.get('room_id')
+    if not room_id:
+        raise MatrixError('Synapse не вернул room_id при создании DM', 502)
+    return room_id
+
+
+def _joined_members(room_id):
+    out, _ = _request(
+        f'/_matrix/client/v3/rooms/{_enc_user(room_id)}/joined_members')
+    return set((out.get('joined') or {}).keys())
+
+
+def _invited_members(room_id):
+    """Приглашённые (но ещё не вошедшие) — им не шлём повторный invite.
+
+    invited_members на этой сборке нет (404) — берём из /members.
+    """
+    out, _ = _request(
+        f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+        f'/members?membership=invite')
+    return {ev.get('state_key') for ev in out.get('chunk') or []
+            if ev.get('state_key')}
+
+
+def _find_broadcast_room(me):
+    """Комната рассылки по имени (создана этим же админом), если уже есть."""
+    data = list_rooms(limit=200)
+    for r in data['rooms']:
+        if (r['name'] == BROADCAST_ROOM_NAME
+                and r['creator'] in (me, '', None)):
+            return r['room_id']
+    return None
+
+
+def send_broadcast(message, mode='dm', user_ids=None):
+    """Рассылка выбранным пользователям.
+
+    mode='dm'  — личное сообщение каждому (комната DM создаётся при
+                  необходимости и запоминается в m.direct);
+    mode='room' — одно сообщение в общий рум «Рассылка VNC Manager»
+                  (необходимые участники приглашаются автоматически).
+    user_ids=[]/None — все активные пользователи сервера.
+    """
+    message = (message or '').strip()
+    if not message:
+        raise MatrixError('Сообщение не может быть пустым', 400)
+    if mode not in ('dm', 'room'):
+        raise MatrixError(f'Неизвестный режим рассылки: {mode}', 400)
+
+    if not user_ids:
+        listed = list_users()
+        user_ids = [u['user_id'] for u in listed['users']
+                    if not u['deactivated']]
+    if isinstance(user_ids, str):
+        user_ids = [user_ids]
+    user_ids = [u.strip() for u in (user_ids or []) if isinstance(u, str)]
+    user_ids = list(dict.fromkeys(u for u in user_ids if u.startswith('@')))
+    if not user_ids:
+        raise MatrixError('Нет получателей для рассылки', 400)
+
+    _token, server_name, _hs = _ensure_token()
+    me = _me_user_id(server_name)
+    errors = []
+
+    if mode == 'dm':
+        direct = _get_m_direct()
+        sent = 0
+        skipped = 0
+        changed = False
+        for uid in user_ids:
+            if uid == me:
+                skipped += 1      # самому себе личка не создаётся
+                continue
+            try:
+                rooms = direct.get(uid) or []
+                try:
+                    if not rooms:
+                        raise MatrixError('DM ещё не создан')
+                    _send_msg(rooms[0], message)
+                except MatrixError:
+                    room = _create_dm_room(uid)
+                    direct[uid] = [room] + [r for r in rooms if r != room]
+                    changed = True
+                    _send_msg(room, message)
+                sent += 1
+            except MatrixError as e:
+                errors.append({'user': uid, 'error': str(e)})
+            time.sleep(_SEND_DELAY)
+        if changed:
+            try:
+                _request(_m_direct_path(), 'PUT', direct)
+            except MatrixError:
+                pass  # книга m.direct вспомогательная: сообщения уже ушли
+        return {'mode': 'dm', 'total': len(user_ids), 'sent': sent,
+                'failed': len(errors), 'skipped': skipped,
+                'errors': errors[:20]}
+
+    # mode == 'room'
+    created = False
+    room_id = _find_broadcast_room(me)
+    if not room_id:
+        out, _ = _request('/_matrix/client/v3/createRoom', 'POST',
+                          {'name': BROADCAST_ROOM_NAME,
+                           'preset': 'private_chat',
+                           'visibility': 'private'})
+        room_id = out.get('room_id')
+        if not room_id:
+            raise MatrixError('Не удалось создать комнату рассылки', 502)
+        created = True
+    members = _joined_members(room_id) | _invited_members(room_id)
+    invited = 0
+    for uid in user_ids:
+        if uid == me or uid in members:
+            continue
+        try:
+            _request(f'/_matrix/client/v3/rooms/{_enc_user(room_id)}/invite',
+                     'POST', {'user_id': uid})
+            invited += 1
+        except MatrixError as e:
+            errors.append({'user': uid, 'error': str(e)})
+        time.sleep(_INVITE_DELAY)
+    _send_msg(room_id, message)
+    return {'mode': 'room', 'room_id': room_id, 'room_name': BROADCAST_ROOM_NAME,
+            'created': created, 'total': len(user_ids), 'invited': invited,
+            'sent': 1, 'failed': len(errors), 'errors': errors[:20]}
