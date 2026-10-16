@@ -2,7 +2,7 @@
 """Вкладка Matrix: админка Synapse (пользователи, комнаты)."""
 from flask import Blueprint, jsonify
 
-from services import matrix_service
+from services import matrix_groups, matrix_service
 from services.api_utils import get_json
 
 bp = Blueprint('matrix', __name__)
@@ -10,6 +10,10 @@ bp = Blueprint('matrix', __name__)
 
 def _err(e):
     return jsonify({'success': False, 'error': str(e)}), e.http_code or 502
+
+
+def _group_err(e):
+    return jsonify({'success': False, 'error': str(e)}), e.http_code or 400
 
 
 @bp.route('/api/matrix/status', methods=['GET'])
@@ -87,3 +91,76 @@ def matrix_broadcast():
         return jsonify({'success': True, **res})
     except matrix_service.MatrixError as e:
         return _err(e)
+
+
+@bp.route('/api/matrix/groups', methods=['GET'])
+def matrix_groups_list():
+    """Локальные группы пользователей (фильтр вкладки)."""
+    try:
+        return jsonify({'success': True, 'groups': matrix_groups.list_groups()})
+    except matrix_groups.GroupError as e:
+        return _group_err(e)
+
+
+@bp.route('/api/matrix/groups', methods=['POST'])
+def matrix_group_create():
+    """Создать группу: {name}."""
+    data = get_json()
+    try:
+        res = matrix_groups.create_group(data.get('name'))
+        return jsonify({'success': True, **res})
+    except matrix_groups.GroupError as e:
+        return _group_err(e)
+
+
+@bp.route('/api/matrix/groups/update', methods=['POST'])
+def matrix_group_update():
+    """Переименовать группу: {id, name}."""
+    data = get_json()
+    try:
+        res = matrix_groups.rename_group(data.get('id'), data.get('name'))
+        return jsonify({'success': True, **res})
+    except matrix_groups.GroupError as e:
+        return _group_err(e)
+
+
+@bp.route('/api/matrix/groups/<int:group_id>', methods=['DELETE'])
+def matrix_group_delete(group_id):
+    """Удалить группу (участники освобождаются)."""
+    try:
+        matrix_groups.delete_group(group_id)
+        return jsonify({'success': True})
+    except matrix_groups.GroupError as e:
+        return _group_err(e)
+
+
+@bp.route('/api/matrix/groups/assign', methods=['POST'])
+def matrix_group_assign():
+    """Назначить пользователя в группу: {user_id, group_id|null}."""
+    data = get_json()
+    try:
+        res = matrix_groups.assign(data.get('user_id'), data.get('group_id'))
+        return jsonify({'success': True, **res})
+    except matrix_groups.GroupError as e:
+        return _group_err(e)
+
+
+@bp.route('/api/matrix/hidden', methods=['GET'])
+def matrix_hidden_list():
+    """Скрытые («удалённые из списка») пользователи."""
+    try:
+        return jsonify({'success': True, 'hidden': matrix_groups.list_hidden()})
+    except matrix_groups.GroupError as e:
+        return _group_err(e)
+
+
+@bp.route('/api/matrix/users/hide', methods=['POST'])
+def matrix_user_hide():
+    """Скрыть/показать пользователя: {user_id, hidden: bool}."""
+    data = get_json()
+    try:
+        res = matrix_groups.set_hidden(data.get('user_id'),
+                                       bool(data.get('hidden')))
+        return jsonify({'success': True, **res})
+    except matrix_groups.GroupError as e:
+        return _group_err(e)

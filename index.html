@@ -1884,8 +1884,22 @@
                         </div>
                         <div style="font-size: 12px; color: var(--text-color); opacity: 0.6; margin-top: 6px;">
                             Отправка выбранным пользователям (галочки в таблице); если ничего не выбрано — всем активным.
+                            Фильтр по группе влияет на «выбрать всех».
                             «Общий рум» — одна комната «Рассылка VNC Manager», участники приглашаются автоматически.
                         </div>
+                    </div>
+
+                    <div style="padding: 10px 24px; border-bottom: 1px solid var(--card-border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
+                        <span style="font-size: 13px; opacity: 0.7;">Группа:</span>
+                        <div id="matrixGroupChips" style="display: flex; gap: 6px; flex-wrap: wrap;"></div>
+                        <button class="btn btn-sm" id="matrixHiddenBtn" style="display: none;" title="Скрытые («удалённые из списка») пользователи">
+                            <i class="fas fa-eye"></i>
+                            <span>Скрытые (0)</span>
+                        </button>
+                        <button class="btn btn-sm" id="matrixGroupsBtn" style="margin-left: auto;">
+                            <i class="fas fa-layer-group"></i>
+                            <span>Группы</span>
+                        </button>
                     </div>
 
                     <div class="table-wrapper">
@@ -1897,9 +1911,10 @@
                                     <th>Пользователь</th>
                                     <th>Имя</th>
                                     <th>Роль</th>
+                                    <th>Группа</th>
                                     <th>Создан</th>
                                     <th>Был(а) последний раз</th>
-                                    <th>Действия</th>
+                                    <th style="width: 120px; text-align: center;">Действия</th>
                                 </tr>
                             </thead>
                             <tbody id="matrixTable">
@@ -1982,6 +1997,27 @@
             <div class="modal-footer">
                 <button class="btn" id="matrixPassCancel">Отмена</button>
                 <button class="btn btn-primary" id="matrixPassSubmit">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Управление группами пользователей Matrix -->
+    <div id="matrixGroupsModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Группы пользователей Matrix</h3>
+                <button class="modal-close" onclick="document.getElementById('matrixGroupsModal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="display: flex; gap: 8px; margin-bottom: 14px;">
+                    <input type="text" id="matrixGroupNameNew" class="form-input" placeholder="Название новой группы" maxlength="64" style="flex: 1;">
+                    <button class="btn btn-primary" id="matrixGroupCreateBtn">Создать</button>
+                </div>
+                <div id="matrixGroupsList" style="display: flex; flex-direction: column; gap: 10px;"></div>
+                <div id="matrixGroupsEmpty" style="display: none; opacity: 0.65; font-size: 13px;">Групп пока нет — создайте первую выше.</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="matrixGroupsClose">Закрыть</button>
             </div>
         </div>
     </div>
@@ -3011,6 +3047,8 @@
                 // Показываем страницу Matrix
                 document.getElementById('matrixContainer').style.display = 'block';
                 loadMatrixUsers();
+                loadMatrixGroups();
+                loadMatrixHidden();
             } else {
                 // Показываем страницу устройств
                 document.getElementById('devicesControls').style.display = 'flex';
@@ -5998,11 +6036,23 @@
             const emptyBox = document.getElementById('matrixEmpty');
             const stats = document.getElementById('matrixStats');
             const query = (document.getElementById('matrixSearch')?.value || '').trim().toLowerCase();
-            const users = matrixUsers.filter(u => {
+            let users = matrixUsers.filter(u => {
                 if (!query) return true;
                 return (u.user_id || '').toLowerCase().includes(query) ||
                        (u.displayname || '').toLowerCase().includes(query);
             });
+            if (matrixGroupFilter !== 'all') {
+                const groupOf = {};
+                matrixGroups.forEach(g => g.members.forEach(mu => { groupOf[mu] = g.id; }));
+                if (matrixGroupFilter === 'none') {
+                    users = users.filter(u => !groupOf[u.user_id]);
+                } else {
+                    users = users.filter(u => groupOf[u.user_id] === matrixGroupFilter);
+                }
+            }
+            if (!matrixShowHidden) {
+                users = users.filter(u => !matrixHidden.has(u.user_id));
+            }
             if (stats) {
                 const online = data ? data.online : matrixUsers.filter(u => u.online).length;
                 const day = data ? data.active_24h : matrixUsers.filter(u => u.active_24h).length;
@@ -6025,11 +6075,22 @@
                 const role = u.admin
                     ? '<span style="color:#f59e0b;"><i class="fas fa-shield-alt"></i> Админ</span>'
                     : 'Пользователь';
-                let actions = `<button class="btn btn-sm" onclick="matrixResetPassword(${idx})">Пароль</button> `;
+                const groupOf = {};
+                matrixGroups.forEach(g => g.members.forEach(mu => { groupOf[mu] = g.id; }));
+                const groupOptions = ['<option value="">— без группы —</option>']
+                    .concat(matrixGroups.map(g =>
+                        `<option value="${g.id}"${groupOf[u.user_id] === g.id ? ' selected' : ''}>${escapeHtml(g.name)}</option>`))
+                    .join('');
+                let actions = `<button class="btn btn-sm" title="Сменить пароль" onclick="matrixResetPassword(${idx})" style="padding: 5px 9px;"><i class="fas fa-key"></i></button> `;
                 if (u.deactivated) {
-                    actions += `<button class="btn btn-sm" onclick="matrixUserAction(${idx}, 'activate')">Включить</button>`;
+                    actions += `<button class="btn btn-sm" title="Включить пользователя" onclick="matrixUserAction(${idx}, 'activate')" style="padding: 5px 9px; color: var(--success);"><i class="fas fa-user-check"></i></button> `;
+                    if (matrixHidden.has(u.user_id)) {
+                        actions += `<button class="btn btn-sm" title="Вернуть в список" onclick="matrixSetHidden(${idx}, false)" style="padding: 5px 9px;"><i class="fas fa-eye"></i></button>`;
+                    } else {
+                        actions += `<button class="btn btn-sm" title="Удалить из списка (скрыть)" onclick="matrixSetHidden(${idx}, true)" style="padding: 5px 9px; color: var(--danger);"><i class="fas fa-trash"></i></button>`;
+                    }
                 } else {
-                    actions += `<button class="btn btn-sm" onclick="matrixUserAction(${idx}, 'deactivate')">Деактивировать</button>`;
+                    actions += `<button class="btn btn-sm" title="Отключить пользователя" onclick="matrixUserAction(${idx}, 'deactivate')" style="padding: 5px 9px; color: var(--danger);"><i class="fas fa-user-slash"></i></button>`;
                 }
                 return `<tr>
                     <td style="text-align: center;"><input type="checkbox" class="matrix-user-check" value="${escapeHtml(u.user_id || '')}" ${matrixSelected.has(u.user_id) ? 'checked' : ''}></td>
@@ -6037,9 +6098,10 @@
                     <td><code>${escapeHtml(u.user_id || '')}</code></td>
                     <td>${escapeHtml(u.displayname || '—')}</td>
                     <td>${role}</td>
+                    <td><select class="form-input" style="height: 30px; padding: 0 6px; font-size: 12px; max-width: 150px;" onchange="matrixAssignGroup('${u.user_id}', this.value)">${groupOptions}</select></td>
                     <td>${matrixFormatTs(u.creation_ts)}</td>
                     <td>${matrixFormatTs(u.last_seen_ts)}</td>
-                    <td>${actions}</td>
+                    <td style="white-space: nowrap; text-align: center;">${actions}</td>
                 </tr>`;
             }).join('');
         }
@@ -6049,7 +6111,7 @@
             if (!u) return;
             const label = u.displayname || u.user_id;
             if (action === 'deactivate') {
-                if (!confirm(`Деактивировать пользователя «${label}»?\nОн потеряет доступ к Matrix.`)) return;
+                if (!confirm(`Отключить пользователя «${label}»?\nОн потеряет доступ к Matrix.`)) return;
             } else if (action === 'activate') {
                 if (!confirm(`Включить пользователя «${label}»?`)) return;
             }
@@ -6139,6 +6201,251 @@
             document.getElementById('matrixCreateModal').classList.remove('active'));
         document.getElementById('matrixPassCancel')?.addEventListener('click', () =>
             document.getElementById('matrixPassModal').classList.remove('active'));
+        document.getElementById('matrixGroupsBtn')?.addEventListener('click', () =>
+            document.getElementById('matrixGroupsModal').classList.add('active'));
+        document.getElementById('matrixGroupsClose')?.addEventListener('click', () =>
+            document.getElementById('matrixGroupsModal').classList.remove('active'));
+        document.getElementById('matrixGroupCreateBtn')?.addEventListener('click', matrixGroupCreate);
+        document.getElementById('matrixGroupNameNew')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') matrixGroupCreate();
+        });
+        document.getElementById('matrixHiddenBtn')?.addEventListener('click', matrixToggleShowHidden);
+
+        // ---- Группы пользователей Matrix -----------------------------------
+        let matrixGroups = [];          // [{id, name, count, members}]
+        let matrixGroupFilter = 'all';  // 'all' | 'none' | id группы
+        let matrixHidden = new Set();   // скрытые («удалённые из списка»)
+        let matrixShowHidden = false;   // показывать ли скрытых в таблице
+
+        async function loadMatrixGroups() {
+            try {
+                const response = await fetch('/api/matrix/groups', { cache: 'no-store' });
+                if (!response.ok) return;
+                const data = await response.json();
+                if (!data.success) return;
+                matrixGroups = data.groups || [];
+                if (typeof matrixGroupFilter === 'number' &&
+                    !matrixGroups.some(g => g.id === matrixGroupFilter)) {
+                    matrixGroupFilter = 'all';
+                }
+                renderMatrixChips();
+                renderMatrixGroupsModal();
+                renderMatrixUsers();
+            } catch (e) {
+                // сеть — чипы просто не обновятся
+            }
+        }
+
+        function renderMatrixChips() {
+            const box = document.getElementById('matrixGroupChips');
+            if (!box) return;
+            const chips = [
+                { v: 'all', label: `Все (${matrixUsers.length})` },
+                { v: 'none', label: 'Без группы' },
+            ].concat(matrixGroups.map(g => ({ v: String(g.id), label: `${g.name} (${g.count})` })));
+            box.innerHTML = chips.map(c => {
+                const active = String(matrixGroupFilter) === c.v;
+                return `<button class="matrix-chip" data-v="${c.v}" style="` +
+                    'padding: 4px 12px; border-radius: 12px; font-size: 13px; cursor: pointer; ' +
+                    `border: 1px solid ${active ? 'var(--primary)' : 'var(--card-border)'}; ` +
+                    `background: ${active ? 'var(--primary-light)' : 'var(--input-bg)'}; ` +
+                    `color: ${active ? 'var(--primary)' : 'var(--text-color)'};">` +
+                    `${escapeHtml(c.label)}</button>`;
+            }).join('');
+            box.querySelectorAll('.matrix-chip').forEach(btn =>
+                btn.addEventListener('click', () => matrixSetGroupFilter(btn.dataset.v)));
+        }
+
+        function matrixSetGroupFilter(v) {
+            matrixGroupFilter = (v === 'all' || v === 'none') ? v : parseInt(v, 10);
+            matrixSelected.clear();          // скрытые строки не должны уйти в рассылку
+            const all = document.getElementById('matrixSelectAll');
+            if (all) all.checked = false;
+            renderMatrixChips();
+            renderMatrixUsers();
+        }
+
+        async function matrixAssignGroup(userId, groupId) {
+            try {
+                const response = await fetch('/api/matrix/groups/assign', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        user_id: userId,
+                        group_id: groupId ? parseInt(groupId, 10) : null
+                    })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification('Группа обновлена', 'success');
+                    await loadMatrixGroups();
+                } else {
+                    showNotification(result.error || 'Ошибка', 'error');
+                    renderMatrixUsers();   // вернуть прежнее значение select
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        function renderMatrixGroupsModal() {
+            const list = document.getElementById('matrixGroupsList');
+            const empty = document.getElementById('matrixGroupsEmpty');
+            if (!list) return;
+            if (!matrixGroups.length) {
+                list.innerHTML = '';
+                if (empty) empty.style.display = 'block';
+                return;
+            }
+            if (empty) empty.style.display = 'none';
+            list.innerHTML = matrixGroups.map(g => `
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <input type="text" class="form-input" data-id="${g.id}" value="${escapeHtml(g.name)}" maxlength="64" style="flex: 1; height: 34px;">
+                    <span style="font-size: 12px; opacity: 0.6; white-space: nowrap;">${g.count} уч.</span>
+                    <button class="btn btn-sm" data-rename="${g.id}">Сохранить</button>
+                    <button class="btn btn-sm" data-del="${g.id}" title="Удалить группу"><i class="fas fa-trash"></i></button>
+                </div>`).join('');
+            list.querySelectorAll('[data-rename]').forEach(btn =>
+                btn.addEventListener('click', () =>
+                    matrixGroupRename(parseInt(btn.dataset.rename, 10))));
+            list.querySelectorAll('[data-del]').forEach(btn =>
+                btn.addEventListener('click', () =>
+                    matrixGroupDelete(parseInt(btn.dataset.del, 10))));
+        }
+
+        async function matrixGroupCreate() {
+            const input = document.getElementById('matrixGroupNameNew');
+            const name = (input?.value || '').trim();
+            if (!name) {
+                showNotification('Введите название группы', 'error');
+                return;
+            }
+            try {
+                const response = await fetch('/api/matrix/groups', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    if (input) input.value = '';
+                    showNotification(`Группа «${result.name}» создана`, 'success');
+                    await loadMatrixGroups();
+                } else {
+                    showNotification(result.error || 'Ошибка создания', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        async function matrixGroupRename(id) {
+            const input = document.querySelector(`#matrixGroupsList input[data-id="${id}"]`);
+            const name = (input?.value || '').trim();
+            if (!name) {
+                showNotification('Введите название группы', 'error');
+                return;
+            }
+            try {
+                const response = await fetch('/api/matrix/groups/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ id, name })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification('Группа переименована', 'success');
+                    await loadMatrixGroups();
+                } else {
+                    showNotification(result.error || 'Ошибка', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        async function matrixGroupDelete(id) {
+            const g = matrixGroups.find(x => x.id === id);
+            if (!confirm(`Удалить группу «${g ? g.name : id}»?\nПользователи останутся без группы.`)) return;
+            try {
+                const response = await fetch('/api/matrix/groups/' + id, { method: 'DELETE' });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification('Группа удалена', 'success');
+                    await loadMatrixGroups();
+                } else {
+                    showNotification(result.error || 'Ошибка', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        // ---- Скрытые пользователи («удаление из списка») --------------------
+        async function loadMatrixHidden() {
+            try {
+                const response = await fetch('/api/matrix/hidden', { cache: 'no-store' });
+                if (!response.ok) return;
+                const data = await response.json();
+                if (!data.success) return;
+                matrixHidden = new Set(data.hidden || []);
+                if (!matrixHidden.size) matrixShowHidden = false;
+                renderMatrixHiddenBtn();
+                renderMatrixUsers();
+            } catch (e) {
+                // сеть — список скрытых просто не обновится
+            }
+        }
+
+        function renderMatrixHiddenBtn() {
+            const btn = document.getElementById('matrixHiddenBtn');
+            if (!btn) return;
+            if (!matrixHidden.size && !matrixShowHidden) {
+                btn.style.display = 'none';
+                return;
+            }
+            btn.style.display = '';
+            btn.innerHTML = matrixShowHidden
+                ? '<i class="fas fa-eye-slash"></i><span>Скрыть скрытых (' + matrixHidden.size + ')</span>'
+                : '<i class="fas fa-eye"></i><span>Скрытые (' + matrixHidden.size + ')</span>';
+            btn.style.color = matrixShowHidden ? 'var(--primary)' : '';
+        }
+
+        function matrixToggleShowHidden() {
+            matrixShowHidden = !matrixShowHidden;
+            matrixSelected.clear();
+            const all = document.getElementById('matrixSelectAll');
+            if (all) all.checked = false;
+            renderMatrixHiddenBtn();
+            renderMatrixUsers();
+        }
+
+        async function matrixSetHidden(index, hide) {
+            const u = matrixUsers[index];
+            if (!u) return;
+            const label = u.displayname || u.user_id;
+            if (hide) {
+                if (!confirm(`Удалить пользователя «${label}» из списка?\nОн остаётся отключённым на сервере; запись можно вернуть кнопкой «Скрытые».`)) return;
+            } else if (!confirm(`Вернуть пользователя «${label}» в список?`)) {
+                return;
+            }
+            try {
+                const response = await fetch('/api/matrix/users/hide', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: u.user_id, hidden: hide })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification(hide ? 'Удалён из списка' : 'Возвращён в список', 'success');
+                    await loadMatrixHidden();
+                } else {
+                    showNotification(result.error || 'Ошибка', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
 
         // ---- Рассылка сообщений (вкладка Matrix) ---------------------------
         function matrixToggleSelect(userId, checked) {

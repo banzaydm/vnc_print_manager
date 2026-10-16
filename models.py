@@ -183,3 +183,37 @@ class SubnetName(db.Model):
 
     def __repr__(self):
         return f'<SubnetName {self.subnet}={self.name}>'
+
+
+class MatrixGroup(db.Model):
+    """Локальная группа пользователей Matrix (фильтрация во вкладке)."""
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(64), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+    def __repr__(self):
+        return f'<MatrixGroup {self.name}>'
+
+
+class MatrixGroupMember(db.Model):
+    """Пользователь Matrix в группе: один пользователь — одна группа."""
+    user_id = db.Column(db.String(320), primary_key=True)
+    group_id = db.Column(db.Integer, db.ForeignKey('matrix_group.id'),
+                         nullable=False)
+    updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
+
+    def __repr__(self):
+        return f'<MatrixGroupMember {self.user_id}->{self.group_id}>'
+
+
+class MatrixHiddenUser(db.Model):
+    """Пользователь Matrix, скрытый во вкладке («удалён из списка»).
+
+    Серверное удаление на части сборок Synapse недоступно (405), поэтому
+    «удаление» — это локальное скрытие; запись остаётся на сервере.
+    """
+    user_id = db.Column(db.String(320), primary_key=True)
+    created_at = db.Column(db.DateTime, default=utcnow)
+
+    def __repr__(self):
+        return f'<MatrixHiddenUser {self.user_id}>'
