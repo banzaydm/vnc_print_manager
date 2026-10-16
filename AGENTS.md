@@ -40,3 +40,61 @@ Get-ChildItem C:\Users\Work\Desktop\VNC_mng\backups -Directory
   файл `style.css` в работу не подключается).
 - RustDesk: `Server.rustdesk_id`, панель lejianwen/rustdesk-api, статусы —
   `GET /api/rustdesk/status` (кэш 30 с, индекс по ID и по IP).
+
+## Matrix (настроено и работает, состояние на 10.2026)
+
+Вкладка **Matrix** — админка нашего Synapse; **с настройкой сервера закончили,
+всё устраивает** — при доработках от этой базы не отступать.
+
+### Сервер
+
+- Synapse 1.162.0 на `192.168.17.250:8008` (docker на omv), server_name `x.dmydm.ru`.
+- Element-Web: `x.dmydm.ru → 192.168.17.250:8082` за NPM (`192.168.17.130:81`).
+- Домен/SSL/прокси — через NPM; `/.well-known/matrix/client` → `https://x.dmydm.ru/`.
+- TURN: `turn.dmydm.ru → 192.168.17.51:3478` (coturn). Для звонков на Keenetic
+  пробрасывать: UDP 3478, TCP 3478, UDP 49152–65535 (relay range coturn) прямо
+  на .51, **минуя NPM** (NPM не умеет UDP); опционально 5349 TCP (turns) и
+  UDP 443 (DTLS), если coturn их слушает.
+- Synapse раздаёт клиентам TURN: `GET /_matrix/client/v3/voip/turnServer` →
+  `turn:x.dmydm.ru:3478?transport=udp|tcp`.
+
+### Код в приложении
+
+- `services/matrix_service.py` — клиент Synapse admin API: логин admin (токен
+  кэш 12 ч), `list_users` (онлайн по `last_seen_ts`, окно 180 с), `list_rooms`,
+  `create_user`/`update_user`, `send_broadcast` (DM через m.direct + общий рум
+  «Рассылка VNC Manager»).
+- `services/matrix_groups.py` — локальные данные вкладки (НЕ на сервере):
+  группы (`MatrixGroup`/`MatrixGroupMember`) и скрытие (`MatrixHiddenUser`).
+- `blueprints/matrix.py` — роуты `/api/matrix/*` (status, users, rooms,
+  broadcast, groups CRUD+assign, hidden, users/hide).
+- Настройки в Настройках приложения: `matrix_hs_url`, `matrix_admin_user`,
+  `matrix_admin_pass` (маскируется в `/api/settings`).
+
+### Особенности Synapse (важно, проверено на нашем сервере)
+
+- **`POST .../send/...` отдаёт 405 M_UNRECOGNIZED — отправлять только `PUT`**
+  (каноничный метод, его же использует Element). Та же фигня с `state`.
+- **Удаление пользователей невозможно**: `DELETE /_synapse/admin/v2/users/*`
+  → 405, `erase`/`deactivate` (v1) → 404. Поэтому «удалить» в UI = локальное
+  скрытие (`POST /api/matrix/users/hide`), возврат — туда же `hidden: false`.
+- **`invited_members` → 404** — состав приглашённых брать из
+  `GET /rooms/{id}/members?membership=invite`.
+- **Список `/_synapse/admin/v2/users` скрывает deactivated** — всегда добавлять
+  `&deactivated=true&guests=true`, иначе отключённые не видны.
+- Создание/обновление юзера — `PUT /_synapse/admin/v2/users/{id}` (upsert;
+  POST → 405). Detail — GET того же пути.
+- **РателIMIT логина ~3 попытки/5 мин на IP** — между живыми прогонами E2E
+  выдерживать паузу ≥5 мин, гонять строго по одному прогону.
+- Presence API недоступен (403) — онлайн только по `last_seen_ts`.
+
+### Проверки
+
+- Смоук `%TEMP%\opencode\matrix_smoke.py` (сеть мокается подменой
+  `matrix_service._http`) — **72/72**: пользователи, комнаты, broadcast,
+  группы, скрытие, маскировка пароля.
+- Живой E2E `%TEMP%\opencode\_matrix_e2e.py` — создание/DM/рум/очистка;
+  гонять **в одиночку** (не параллельно со смоуками: они восстанавливают БД
+  и перетирают креды Matrix под ногами).
+- Регресс: routes baseline **63**, `auth 14`, `users 6`, `devices 16`,
+  `multiip 12`, `scan 108`, `cleardb 4` — всё зелёное перед коммитом.
