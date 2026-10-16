@@ -1858,6 +1858,14 @@
                                 <i class="fas fa-user-plus"></i>
                                 <span>Создать</span>
                             </button>
+                            <button class="btn" id="matrixRoomsBtn" title="Управление комнатами: создание, участники, роли, редактирование, удаление">
+                                <i class="fas fa-door-open"></i>
+                                <span>Комнаты</span>
+                            </button>
+                            <button class="btn" id="matrixGroupsBtn" title="Группы пользователей">
+                                <i class="fas fa-layer-group"></i>
+                                <span>Группы</span>
+                            </button>
                             <button class="btn" id="matrixRefreshBtn">
                                 <i class="fas fa-sync"></i>
                                 <span>Обновить</span>
@@ -1866,7 +1874,17 @@
                     </div>
 
                     <div style="padding: 14px 24px; border-bottom: 1px solid var(--card-border);">
-                        <textarea id="matrixBroadcastText" class="form-input form-textarea" rows="2" placeholder="Сообщение для рассылки…" style="margin-bottom: 8px;"></textarea>
+                    <div style="position: relative;">
+                        <textarea id="matrixBroadcastText" class="form-input form-textarea" rows="2" placeholder="Сообщение для рассылки…" style="margin-bottom: 8px; padding-left: 40px;"></textarea>
+                        <button type="button" id="matrixEmojiBtn" title="Добавить эмодзи" style="position: absolute; bottom: 12px; left: 8px; background: none; border: none; cursor: pointer; font-size: 18px; line-height: 1; padding: 4px;">😊</button>
+                        <div id="matrixEmojiPicker" style="display: none; position: absolute; top: 44px; left: 8px; z-index: 100; background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px; padding: 10px; width: 300px; max-width: calc(100vw - 40px); box-shadow: 0 8px 24px rgba(0,0,0,.35);">
+                                <div id="matrixEmojiGrid" style="display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px;"></div>
+                                <div style="display: flex; gap: 6px; margin-top: 8px;">
+                                    <button type="button" class="btn btn-sm" id="matrixEmojiClose" style="flex: 1; font-size: 12px;">Закрыть</button>
+                                    <button type="button" class="btn btn-sm" id="matrixEmojiClear" style="flex: 1; font-size: 12px;">Очистить выбор</button>
+                                </div>
+                            </div>
+                        </div>
                         <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap;">
                             <label style="display: flex; align-items: center; gap: 6px; margin: 0; cursor: pointer;">
                                 <input type="radio" name="matrixBroadcastMode" value="dm" checked>
@@ -1876,6 +1894,9 @@
                                 <input type="radio" name="matrixBroadcastMode" value="room">
                                 <span>Общий рум</span>
                             </label>
+                            <select id="matrixBroadcastRoom" class="form-input" style="display: none; height: 34px; margin: 0; min-width: 220px;">
+                                <option value="">— выберите комнату —</option>
+                            </select>
                             <button class="btn btn-primary" id="matrixBroadcastSend">
                                 <i class="fas fa-paper-plane"></i>
                                 <span>Отправить</span>
@@ -1885,20 +1906,16 @@
                         <div style="font-size: 12px; color: var(--text-color); opacity: 0.6; margin-top: 6px;">
                             Отправка выбранным пользователям (галочки в таблице); если ничего не выбрано — всем активным.
                             Фильтр по группе влияет на «выбрать всех».
-                            «Общий рум» — одна комната «Рассылка VNC Manager», участники приглашаются автоматически.
+                            «Общий рум» — выберите комнату из списка; приглашения не отправляются автоматически.
                         </div>
                     </div>
 
                     <div style="padding: 10px 24px; border-bottom: 1px solid var(--card-border); display: flex; align-items: center; gap: 8px; flex-wrap: wrap;">
                         <span style="font-size: 13px; opacity: 0.7;">Группа:</span>
                         <div id="matrixGroupChips" style="display: flex; gap: 6px; flex-wrap: wrap;"></div>
-                        <button class="btn btn-sm" id="matrixHiddenBtn" style="display: none;" title="Скрытые («удалённые из списка») пользователи">
+                        <button class="btn btn-sm" id="matrixHiddenBtn" style="display: none; margin-left: auto;" title="Скрытые («удалённые из списка») пользователи">
                             <i class="fas fa-eye"></i>
                             <span>Скрытые (0)</span>
-                        </button>
-                        <button class="btn btn-sm" id="matrixGroupsBtn" style="margin-left: auto;">
-                            <i class="fas fa-layer-group"></i>
-                            <span>Группы</span>
                         </button>
                     </div>
 
@@ -1914,7 +1931,7 @@
                                     <th>Группа</th>
                                     <th>Создан</th>
                                     <th>Был(а) последний раз</th>
-                                    <th style="width: 120px; text-align: center;">Действия</th>
+                                    <th style="width: 150px; text-align: center;">Действия</th>
                                 </tr>
                             </thead>
                             <tbody id="matrixTable">
@@ -1977,6 +1994,47 @@
         </div>
     </div>
 
+    <!-- Редактирование пользователя Matrix -->
+    <div id="matrixEditUserModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h3 class="modal-title">Редактирование пользователя</h3>
+                <button class="modal-close" onclick="document.getElementById('matrixEditUserModal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label class="form-label">Пользователь</label>
+                    <div id="matrixEditUserLogin" style="font-family: monospace; opacity: 0.85;"></div>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Отображаемое имя</label>
+                    <input type="text" id="matrixEditUserName" class="form-input" placeholder="Иванов Иван" maxlength="128">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Аватар</label>
+                    <div style="display:flex;align-items:center;gap:12px;">
+                        <img id="matrixEditUserAvatarPreview" src="" style="width:56px;height:56px;border-radius:50%;object-fit:cover;display:none;">
+                        <div id="matrixEditUserAvatarPlaceholder" style="width:56px;height:56px;border-radius:50%;background:var(--primary);opacity:.2;display:flex;align-items:center;justify-content:center;font-size:22px;"></div>
+                        <input type="file" id="matrixEditUserAvatarFile" accept="image/*" style="display:none;">
+                        <div style="display:flex;flex-direction:column;gap:6px;">
+                            <button type="button" class="btn btn-sm" id="matrixEditUserAvatarBtn"><i class="fas fa-upload"></i> Загрузить</button>
+                            <button type="button" class="btn btn-sm" id="matrixEditUserAvatarClear" style="color:var(--danger);"><i class="fas fa-trash"></i> Убрать</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="matrixEditUserAdmin"> Администратор сервера
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="matrixEditUserCancel">Отмена</button>
+                <button class="btn btn-primary" id="matrixEditUserSubmit">Сохранить</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Модальное окно смены пароля Matrix -->
     <div id="matrixPassModal" class="modal-overlay">
         <div class="modal">
@@ -2018,6 +2076,49 @@
             </div>
             <div class="modal-footer">
                 <button class="btn" id="matrixGroupsClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Управление комнатами Matrix -->
+    <div id="matrixRoomsModal" class="modal-overlay">
+        <div class="modal" style="max-width: 720px;">
+            <div class="modal-header">
+                <h3 class="modal-title">Комнаты Matrix</h3>
+                <button class="modal-close" onclick="document.getElementById('matrixRoomsModal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
+                    <input type="text" id="matrixRoomNameNew" class="form-input" placeholder="Название новой комнаты" maxlength="128" style="flex: 2; min-width: 200px;">
+                    <input type="text" id="matrixRoomInviteNew" class="form-input" placeholder="Пригласить (user_id через запятую, опционально)" style="flex: 3; min-width: 240px;">
+                    <button class="btn btn-primary" id="matrixRoomCreateBtn">Создать</button>
+                </div>
+                <div id="matrixRoomsList" style="display: flex; flex-direction: column; gap: 8px;"></div>
+                <div id="matrixRoomsEmpty" style="display: none; opacity: 0.65; font-size: 13px;">Комнат пока нет — создайте первую выше.</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="matrixRoomsClose">Закрыть</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Участники комнаты Matrix -->
+    <div id="matrixRoomMembersModal" class="modal-overlay">
+        <div class="modal" style="max-width: 680px;">
+            <div class="modal-header">
+                <h3 class="modal-title" id="matrixRoomMembersTitle">Участники комнаты</h3>
+                <button class="modal-close" onclick="document.getElementById('matrixRoomMembersModal').classList.remove('active')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
+                    <input type="text" id="matrixRoomInviteInput" class="form-input" placeholder="@user:домен" style="flex: 1; min-width: 200px;">
+                    <button class="btn btn-primary" id="matrixRoomInviteBtn">Пригласить</button>
+                </div>
+                <div id="matrixRoomMembersList" style="display: flex; flex-direction: column; gap: 6px;"></div>
+                <div id="matrixRoomMembersEmpty" style="display: none; opacity: 0.65; font-size: 13px;">В комнате пока нет участников.</div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" id="matrixRoomMembersClose">Закрыть</button>
             </div>
         </div>
     </div>
@@ -3049,6 +3150,7 @@
                 loadMatrixUsers();
                 loadMatrixGroups();
                 loadMatrixHidden();
+                loadMatrixRooms();
             } else {
                 // Показываем страницу устройств
                 document.getElementById('devicesControls').style.display = 'flex';
@@ -6081,7 +6183,8 @@
                     .concat(matrixGroups.map(g =>
                         `<option value="${g.id}"${groupOf[u.user_id] === g.id ? ' selected' : ''}>${escapeHtml(g.name)}</option>`))
                     .join('');
-                let actions = `<button class="btn btn-sm" title="Сменить пароль" onclick="matrixResetPassword(${idx})" style="padding: 5px 9px;"><i class="fas fa-key"></i></button> `;
+                let actions = `<button class="btn btn-sm" title="Редактировать (имя, роль)" onclick="matrixEditUser(${idx})" style="padding: 5px 9px;"><i class="fas fa-user-edit"></i></button> `;
+                actions += `<button class="btn btn-sm" title="Сменить пароль" onclick="matrixResetPassword(${idx})" style="padding: 5px 9px;"><i class="fas fa-key"></i></button> `;
                 if (u.deactivated) {
                     actions += `<button class="btn btn-sm" title="Включить пользователя" onclick="matrixUserAction(${idx}, 'activate')" style="padding: 5px 9px; color: var(--success);"><i class="fas fa-user-check"></i></button> `;
                     if (matrixHidden.has(u.user_id)) {
@@ -6096,7 +6199,7 @@
                     <td style="text-align: center;"><input type="checkbox" class="matrix-user-check" value="${escapeHtml(u.user_id || '')}" ${matrixSelected.has(u.user_id) ? 'checked' : ''}></td>
                     <td>${status}</td>
                     <td><code>${escapeHtml(u.user_id || '')}</code></td>
-                    <td>${escapeHtml(u.displayname || '—')}</td>
+                    <td><div style="display:flex;align-items:center;gap:8px;">${u.avatar_url ? `<img src="${escapeHtml(u.avatar_url)}" style="width:28px;height:28px;border-radius:50%;object-fit:cover;flex-shrink:0;">` : `<div style="width:28px;height:28px;border-radius:50%;background:var(--primary);opacity:.2;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;">${(u.displayname||u.user_id||'?').charAt(0).toUpperCase()}</div>`}<span>${escapeHtml(u.displayname || '—')}</span></div></td>
                     <td>${role}</td>
                     <td><select class="form-input" style="height: 30px; padding: 0 6px; font-size: 12px; max-width: 150px;" onchange="matrixAssignGroup('${u.user_id}', this.value)">${groupOptions}</select></td>
                     <td>${matrixFormatTs(u.creation_ts)}</td>
@@ -6155,6 +6258,98 @@
             modal.classList.remove('active');
         }
 
+        let matrixEditUserAvatarMxc = '';    // mxc:// текущего аватара в модалке
+        let matrixEditUserAvatarNew = null;  // mxc:// нового; '' — сброс; null — без изменений
+
+        function matrixEditUser(index) {
+            const u = matrixUsers[index];
+            if (!u) return;
+            const modal = document.getElementById('matrixEditUserModal');
+            document.getElementById('matrixEditUserLogin').textContent = u.user_id;
+            document.getElementById('matrixEditUserName').value = u.displayname || '';
+            document.getElementById('matrixEditUserAdmin').checked = !!u.admin;
+            matrixEditUserAvatarMxc = u.avatar_mxc || '';
+            matrixEditUserAvatarNew = null;
+            matrixUpdateAvatarPreview(u.avatar_url, u.displayname || u.user_id);
+            modal.dataset.userIndex = String(index);
+            modal.classList.add('active');
+        }
+
+        function matrixUpdateAvatarPreview(url, label) {
+            const img = document.getElementById('matrixEditUserAvatarPreview');
+            const ph = document.getElementById('matrixEditUserAvatarPlaceholder');
+            if (url) {
+                img.src = url;
+                img.style.display = '';
+                ph.style.display = 'none';
+            } else {
+                img.style.display = 'none';
+                ph.style.display = '';
+                ph.textContent = (label || '?').charAt(0).toUpperCase();
+            }
+        }
+
+        function matrixReadAvatarFile(input, onDone) {
+            const file = input.files && input.files[0];
+            if (!file) return;
+            if (file.size > 5 * 1024 * 1024) {
+                showNotification('Файл больше 5 МБ', 'error');
+                input.value = '';
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => {
+                const dataUrl = reader.result;
+                const b64 = dataUrl.split(',')[1] || '';
+                const ctype = file.type || 'image/png';
+                fetch('/api/matrix/media/upload', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ data: b64, content_type: ctype })
+                })
+                .then(r => r.json())
+                .then(result => {
+                    if (result.success && result.mxc_url) {
+                        onDone(result.mxc_url, result.http_url);
+                    } else {
+                        showNotification(result.error || 'Ошибка загрузки', 'error');
+                    }
+                })
+                .catch(() => showNotification('Ошибка соединения', 'error'));
+            };
+            reader.readAsDataURL(file);
+        }
+
+        async function matrixSaveUserProfile() {
+            const modal = document.getElementById('matrixEditUserModal');
+            const idx = parseInt(modal.dataset.userIndex || '-1', 10);
+            const u = matrixUsers[idx];
+            if (!u) return;
+            const displayname = document.getElementById('matrixEditUserName').value.trim();
+            const admin = document.getElementById('matrixEditUserAdmin').checked;
+            const body = { user_id: u.user_id, action: 'profile', displayname, admin };
+            if (matrixEditUserAvatarNew !== null) {
+                body.avatar_url = matrixEditUserAvatarNew;  // '' — сброс
+            }
+            try {
+                const response = await fetch('/api/matrix/users/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification('Профиль обновлён', 'success');
+                    modal.classList.remove('active');
+                    await loadMatrixUsers();
+                } else {
+                    showNotification(result.error || 'Ошибка', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
         async function matrixCreateSubmit() {
             const localpart = document.getElementById('matrixCreateLogin').value.trim();
             const displayname = document.getElementById('matrixCreateName').value.trim();
@@ -6201,6 +6396,22 @@
             document.getElementById('matrixCreateModal').classList.remove('active'));
         document.getElementById('matrixPassCancel')?.addEventListener('click', () =>
             document.getElementById('matrixPassModal').classList.remove('active'));
+        document.getElementById('matrixEditUserCancel')?.addEventListener('click', () =>
+            document.getElementById('matrixEditUserModal').classList.remove('active'));
+        document.getElementById('matrixEditUserSubmit')?.addEventListener('click', matrixSaveUserProfile);
+        document.getElementById('matrixEditUserAvatarBtn')?.addEventListener('click', () =>
+            document.getElementById('matrixEditUserAvatarFile').click());
+        document.getElementById('matrixEditUserAvatarFile')?.addEventListener('change', function () {
+            matrixReadAvatarFile(this, (mxc, http) => {
+                matrixEditUserAvatarNew = mxc;
+                matrixUpdateAvatarPreview(http, document.getElementById('matrixEditUserName').value);
+                this.value = '';
+            });
+        });
+        document.getElementById('matrixEditUserAvatarClear')?.addEventListener('click', () => {
+            matrixEditUserAvatarNew = '';  // '' — сброс аватара
+            matrixUpdateAvatarPreview('', document.getElementById('matrixEditUserName').value || '?');
+        });
         document.getElementById('matrixGroupsBtn')?.addEventListener('click', () =>
             document.getElementById('matrixGroupsModal').classList.add('active'));
         document.getElementById('matrixGroupsClose')?.addEventListener('click', () =>
@@ -6470,6 +6681,154 @@
             });
         });
 
+        // ---- Рассылка: выбор комнаты и отправка ----------------------------
+        let matrixRooms = [];             // [{room_id, name, members, creator}]
+        let matrixCurrentRoomId = null;   // открытая комната в модалке участников
+
+        async function loadMatrixRooms() {
+            try {
+                const response = await fetch('/api/matrix/rooms', { cache: 'no-store' });
+                if (!response.ok) return;
+                const data = await response.json();
+                if (!data.success) return;
+                matrixRooms = data.rooms || [];
+                renderMatrixRoomSelect();
+                renderMatrixRoomsList();
+            } catch (e) {
+                // сеть — список комнат просто не обновится
+            }
+        }
+
+        function renderMatrixRoomSelect() {
+            const sel = document.getElementById('matrixBroadcastRoom');
+            if (!sel) return;
+            const prev = sel.value;
+            sel.innerHTML = '<option value="">— выберите комнату —</option>' +
+                matrixRooms.map(r =>
+                    `<option value="${escapeHtml(r.room_id)}">${escapeHtml(r.name || r.room_id)} (${r.members} уч.)</option>`
+                ).join('');
+            if (prev && matrixRooms.some(r => r.room_id === prev)) sel.value = prev;
+        }
+
+        function renderMatrixRoomsList() {
+            const list = document.getElementById('matrixRoomsList');
+            const empty = document.getElementById('matrixRoomsEmpty');
+            if (!list) return;
+            if (!matrixRooms.length) {
+                list.innerHTML = '';
+                if (empty) empty.style.display = 'block';
+                return;
+            }
+            if (empty) empty.style.display = 'none';
+            list.innerHTML = matrixRooms.map(r => `
+                <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                    <div style="position:relative;flex-shrink:0;">
+                        <img data-avatarimg="${escapeHtml(r.room_id)}" src="${escapeHtml(r.avatar_url || '')}" style="width:40px;height:40px;border-radius:8px;object-fit:cover;${r.avatar_url ? '' : 'display:none;'}">
+                        <div data-avatarph="${escapeHtml(r.room_id)}" style="width:40px;height:40px;border-radius:8px;background:var(--primary);opacity:.2;display:flex;align-items:center;justify-content:center;font-size:16px;${r.avatar_url ? 'display:none;' : ''}">${(r.name||'?').charAt(0).toUpperCase()}</div>
+                        <button type="button" data-avatarbtn="${escapeHtml(r.room_id)}" title="Сменить аватар" style="position:absolute;bottom:-2px;right:-2px;background:var(--card-bg);border:1px solid var(--card-border);border-radius:50%;width:18px;height:18px;font-size:9px;cursor:pointer;display:flex;align-items:center;justify-content:center;padding:0;"><i class="fas fa-camera"></i></button>
+                        <input type="file" data-avatarfile="${escapeHtml(r.room_id)}" accept="image/*" style="display:none;">
+                    </div>
+                    <input type="text" class="form-input" data-name="${escapeHtml(r.room_id)}" value="${escapeHtml(r.name || '')}" placeholder="Название" maxlength="128" style="flex: 2; min-width: 160px; height: 34px;">
+                    <input type="text" class="form-input" data-topic="${escapeHtml(r.room_id)}" value="${escapeHtml(r.topic || '')}" placeholder="Тема" maxlength="256" style="flex: 2; min-width: 140px; height: 34px;">
+                    <span style="font-size: 12px; opacity: 0.7; white-space: nowrap;">${r.members} уч.</span>
+                    <button class="btn btn-sm" data-saveroom="${escapeHtml(r.room_id)}" title="Сохранить изменения"><i class="fas fa-check"></i></button>
+                    <button class="btn btn-sm" data-members="${escapeHtml(r.room_id)}" title="Участники, роли, приглашения">
+                        <i class="fas fa-users"></i> Участники
+                    </button>
+                    <button class="btn btn-sm" data-delroom="${escapeHtml(r.room_id)}" title="Удалить комнату (для пустых)">
+                        <i class="fas fa-trash"></i>
+                    </button>
+                </div>
+                <div style="font-size: 11px; opacity: 0.5; font-family: monospace; margin: -4px 0 4px;">${escapeHtml(r.room_id)}</div>`).join('');
+            list.querySelectorAll('[data-avatarbtn]').forEach(btn =>
+                btn.addEventListener('click', () => {
+                    const rid = btn.dataset.avatarbtn;
+                    list.querySelector(`[data-avatarfile="${CSS.escape(rid)}"]`)?.click();
+                }));
+            list.querySelectorAll('[data-avatarfile]').forEach(inp =>
+                inp.addEventListener('change', function () {
+                    const rid = this.dataset.avatarfile;
+                    matrixReadAvatarFile(this, (mxc, http) => {
+                        matrixSaveRoomAvatar(rid, mxc, http);
+                        this.value = '';
+                    });
+                }));
+            list.querySelectorAll('[data-saveroom]').forEach(btn =>
+                btn.addEventListener('click', () =>
+                    matrixSaveRoomInline(btn.dataset.saveroom)));
+            list.querySelectorAll('[data-members]').forEach(btn =>
+                btn.addEventListener('click', () =>
+                    matrixOpenRoomMembers(btn.dataset.members)));
+            list.querySelectorAll('[data-delroom]').forEach(btn =>
+                btn.addEventListener('click', () =>
+                    matrixDeleteRoom(btn.dataset.delroom)));
+        }
+
+        async function matrixSaveRoomAvatar(roomId, mxc, httpUrl) {
+            try {
+                const response = await fetch('/api/matrix/rooms/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ room_id: roomId, avatar_url: mxc })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    const list = document.getElementById('matrixRoomsList');
+                    const img = list?.querySelector(`[data-avatarimg="${CSS.escape(roomId)}"]`);
+                    const ph = list?.querySelector(`[data-avatarph="${CSS.escape(roomId)}"]`);
+                    if (img && ph) {
+                        img.src = httpUrl;
+                        img.style.display = '';
+                        ph.style.display = 'none';
+                    }
+                    showNotification('Аватар комнаты обновлён', 'success');
+                    const room = matrixRooms.find(r => r.room_id === roomId);
+                    if (room) { room.avatar_url = httpUrl; room.avatar_mxc = mxc; }
+                    renderMatrixRoomSelect();
+                } else {
+                    showNotification(result.error || 'Ошибка', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        async function matrixSaveRoomInline(roomId) {
+            const list = document.getElementById('matrixRoomsList');
+            const nameInput = list?.querySelector(`[data-name="${CSS.escape(roomId)}"]`);
+            const topicInput = list?.querySelector(`[data-topic="${CSS.escape(roomId)}"]`);
+            const name = (nameInput?.value || '').trim();
+            if (!name) {
+                showNotification('Укажите название комнаты', 'error');
+                return;
+            }
+            const topic = (topicInput?.value || '').trim();
+            try {
+                const response = await fetch('/api/matrix/rooms/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ room_id: roomId, name, topic })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification('Комната обновлена', 'success');
+                    await loadMatrixRooms();
+                } else {
+                    showNotification(result.error || 'Ошибка', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        function matrixToggleBroadcastRoomSelect() {
+            const mode = document.querySelector('input[name="matrixBroadcastMode"]:checked')?.value || 'dm';
+            const sel = document.getElementById('matrixBroadcastRoom');
+            if (sel) sel.style.display = mode === 'room' ? '' : 'none';
+        }
+        document.querySelectorAll('input[name="matrixBroadcastMode"]').forEach(radio =>
+            radio.addEventListener('change', matrixToggleBroadcastRoomSelect));
+
         async function matrixBroadcastSend() {
             const textEl = document.getElementById('matrixBroadcastText');
             const btn = document.getElementById('matrixBroadcastSend');
@@ -6481,13 +6840,22 @@
             }
             const mode = document.querySelector('input[name="matrixBroadcastMode"]:checked')?.value || 'dm';
             const users = Array.from(matrixSelected);
+            const body = { message, mode, users };
+            if (mode === 'room') {
+                const roomId = document.getElementById('matrixBroadcastRoom')?.value || '';
+                if (!roomId) {
+                    showNotification('Выберите комнату для рассылки', 'error');
+                    return;
+                }
+                body.room_id = roomId;
+            }
             if (btn) btn.disabled = true;
             if (status) status.textContent = 'Отправка…';
             try {
                 const response = await fetch('/api/matrix/broadcast', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message, mode, users })
+                    body: JSON.stringify(body)
                 });
                 const result = await response.json();
                 if (response.ok && result.success) {
@@ -6520,6 +6888,253 @@
         }
 
         document.getElementById('matrixBroadcastSend')?.addEventListener('click', matrixBroadcastSend);
+
+        // ---- Эмодзи-пикер для поля рассылки --------------------------------
+        const MATRIX_EMOJI = [
+            '😀','😂','😊','😉','😍','🥰','😎','🤔',
+            '👍','👎','👌','🙏','💪','👏','🎉','🔥',
+            '✅','❌','⚠️','ℹ️','❗','❓','💡','📌',
+            '🚀','⚡','🛠️','🔧','🖥️','📶','🔒','🔑',
+            '📦','📋','📊','📈','📉','⏰','📅','🔔',
+            '💬','📢','📣','🎯','⭐','❤️','💯','🙌'
+        ];
+        (function initMatrixEmojiPicker() {
+            const btn = document.getElementById('matrixEmojiBtn');
+            const picker = document.getElementById('matrixEmojiPicker');
+            const grid = document.getElementById('matrixEmojiGrid');
+            const ta = document.getElementById('matrixBroadcastText');
+            if (!btn || !picker || !grid || !ta) return;
+            grid.innerHTML = MATRIX_EMOJI.map(e =>
+                `<button type="button" data-e="${e}" style="background:none;border:none;cursor:pointer;font-size:18px;padding:4px;border-radius:6px;">${e}</button>`
+            ).join('');
+            btn.addEventListener('click', () => {
+                picker.style.display = picker.style.display === 'none' ? '' : 'none';
+            });
+            document.getElementById('matrixEmojiClose')?.addEventListener('click', () => {
+                picker.style.display = 'none';
+            });
+            document.getElementById('matrixEmojiClear')?.addEventListener('click', () => {
+                ta.value = '';
+                picker.style.display = 'none';
+            });
+            grid.querySelectorAll('[data-e]').forEach(b => {
+                b.addEventListener('click', () => {
+                    const start = ta.selectionStart ?? ta.value.length;
+                    const end = ta.selectionEnd ?? start;
+                    ta.value = ta.value.slice(0, start) + b.dataset.e + ta.value.slice(end);
+                    ta.focus();
+                    const pos = start + b.dataset.e.length;
+                    ta.setSelectionRange(pos, pos);
+                });
+                b.addEventListener('mouseenter', () => { b.style.background = 'rgba(255,255,255,.1)'; });
+                b.addEventListener('mouseleave', () => { b.style.background = 'none'; });
+            });
+            // закрыть при клике вне пикера
+            document.addEventListener('click', (e) => {
+                if (!picker.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+                    picker.style.display = 'none';
+                }
+            });
+        })();
+
+        // ---- Управление комнатами: создание, участники, роли, удаление -----
+        document.getElementById('matrixRoomsBtn')?.addEventListener('click', () => {
+            loadMatrixRooms();
+            document.getElementById('matrixRoomsModal').classList.add('active');
+        });
+        document.getElementById('matrixRoomsClose')?.addEventListener('click', () =>
+            document.getElementById('matrixRoomsModal').classList.remove('active'));
+        document.getElementById('matrixRoomCreateBtn')?.addEventListener('click', matrixRoomCreate);
+        document.getElementById('matrixRoomNameNew')?.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') matrixRoomCreate();
+        });
+        document.getElementById('matrixRoomMembersClose')?.addEventListener('click', () =>
+            document.getElementById('matrixRoomMembersModal').classList.remove('active'));
+        document.getElementById('matrixRoomInviteBtn')?.addEventListener('click', matrixRoomInvite);
+
+        async function matrixRoomCreate() {
+            const nameInput = document.getElementById('matrixRoomNameNew');
+            const inviteInput = document.getElementById('matrixRoomInviteNew');
+            const name = (nameInput?.value || '').trim();
+            if (!name) {
+                showNotification('Введите название комнаты', 'error');
+                return;
+            }
+            const invite = (inviteInput?.value || '').split(',')
+                .map(s => s.trim()).filter(s => s.startsWith('@'));
+            try {
+                const response = await fetch('/api/matrix/rooms', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, invite })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification(`Комната «${name}» создана`, 'success');
+                    if (nameInput) nameInput.value = '';
+                    if (inviteInput) inviteInput.value = '';
+                    await loadMatrixRooms();
+                } else {
+                    showNotification(result.error || 'Ошибка создания', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        async function matrixDeleteRoom(roomId) {
+            const room = matrixRooms.find(r => r.room_id === roomId);
+            const label = room?.name || roomId;
+            if (!confirm(`Удалить комнату «${label}»?\nДействие необратимо, все участники будут исключены.`)) return;
+            try {
+                const response = await fetch('/api/matrix/rooms/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ room_id: roomId })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification(`Комната «${label}» удалена`, 'success');
+                    await loadMatrixRooms();
+                } else {
+                    showNotification(result.error || 'Ошибка удаления', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        async function matrixOpenRoomMembers(roomId) {
+            matrixCurrentRoomId = roomId;
+            const room = matrixRooms.find(r => r.room_id === roomId);
+            document.getElementById('matrixRoomMembersTitle').textContent =
+                'Участники: ' + (room?.name || roomId);
+            const modal = document.getElementById('matrixRoomMembersModal');
+            modal.classList.add('active');
+            await matrixLoadRoomMembers();
+        }
+
+        async function matrixLoadRoomMembers() {
+            if (!matrixCurrentRoomId) return;
+            const list = document.getElementById('matrixRoomMembersList');
+            const empty = document.getElementById('matrixRoomMembersEmpty');
+            try {
+                const response = await fetch(
+                    '/api/matrix/rooms/members?room_id=' +
+                    encodeURIComponent(matrixCurrentRoomId), { cache: 'no-store' });
+                const data = await response.json();
+                if (!response.ok || !data.success) {
+                    showNotification(data.error || 'Ошибка загрузки участников', 'error');
+                    return;
+                }
+                const members = data.members || [];
+                if (!members.length) {
+                    list.innerHTML = '';
+                    if (empty) empty.style.display = 'block';
+                    return;
+                }
+                if (empty) empty.style.display = 'none';
+                list.innerHTML = members.map(m => {
+                    const isInvite = m.membership === 'invite';
+                    const roleOptions = isInvite
+                        ? '<span style="font-size: 12px; opacity: 0.6;">Приглашён</span>'
+                        : `<select class="form-input" data-pl="${escapeHtml(m.user_id)}" style="height: 30px; width: 140px; margin: 0;">
+                            <option value="0" ${m.power_level === 0 ? 'selected' : ''}>Участник</option>
+                            <option value="50" ${m.power_level === 50 ? 'selected' : ''}>Модератор</option>
+                            <option value="100" ${m.power_level === 100 ? 'selected' : ''}>Админ</option>
+                           </select>`;
+                    const kickBtn = `<button class="btn btn-sm" data-kick="${escapeHtml(m.user_id)}" title="Исключить"><i class="fas fa-user-minus"></i></button>`;
+                    return `<div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+                        ${m.avatar_url
+                            ? `<img src="${escapeHtml(m.avatar_url)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;">`
+                            : `<div style="width:32px;height:32px;border-radius:50%;background:var(--primary);opacity:.2;display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;">${((m.displayname||m.user_id||'?')).charAt(0).toUpperCase()}</div>`}
+                        <div style="flex: 1; min-width: 160px;">
+                            <div style="font-weight: 600; font-size: 13px;">${escapeHtml(m.displayname || m.user_id)}</div>
+                            <div style="font-size: 12px; opacity: 0.6; font-family: monospace;">${escapeHtml(m.user_id)}</div>
+                        </div>
+                        ${roleOptions}
+                        ${kickBtn}
+                    </div>`;
+                }).join('');
+                list.querySelectorAll('[data-pl]').forEach(sel =>
+                    sel.addEventListener('change', () =>
+                        matrixSetPowerLevel(sel.dataset.pl, parseInt(sel.value, 10))));
+                list.querySelectorAll('[data-kick]').forEach(btn =>
+                    btn.addEventListener('click', () =>
+                        matrixRoomKick(btn.dataset.kick)));
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        async function matrixRoomInvite() {
+            if (!matrixCurrentRoomId) return;
+            const input = document.getElementById('matrixRoomInviteInput');
+            const userId = (input?.value || '').trim();
+            if (!userId.startsWith('@')) {
+                showNotification('Укажите user_id (начинается с @)', 'error');
+                return;
+            }
+            try {
+                const response = await fetch('/api/matrix/rooms/invite', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ room_id: matrixCurrentRoomId, user_id: userId })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification(`Приглашение отправлено ${userId}`, 'success');
+                    if (input) input.value = '';
+                    await matrixLoadRoomMembers();
+                    await loadMatrixRooms();   // обновить счётчик участников
+                } else {
+                    showNotification(result.error || 'Ошибка приглашения', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        async function matrixRoomKick(userId) {
+            if (!confirm(`Исключить ${userId} из комнаты?`)) return;
+            try {
+                const response = await fetch('/api/matrix/rooms/kick', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ room_id: matrixCurrentRoomId, user_id: userId })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification(`${userId} исключён`, 'success');
+                    await matrixLoadRoomMembers();
+                    await loadMatrixRooms();
+                } else {
+                    showNotification(result.error || 'Ошибка исключения', 'error');
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        async function matrixSetPowerLevel(userId, level) {
+            try {
+                const response = await fetch('/api/matrix/rooms/power-level', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ room_id: matrixCurrentRoomId, user_id: userId, level })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification(`Роль ${userId} обновлена`, 'success');
+                    await matrixLoadRoomMembers();
+                } else {
+                    showNotification(result.error || 'Ошибка изменения роли', 'error');
+                    await matrixLoadRoomMembers();   // вернуть прежнее значение
+                }
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
 
         // ---- Статусы RustDesk на кнопках «Подключиться» ------------------
         // Точка: зелёная — онлайн, красная — офлайн, серая — ID не указан

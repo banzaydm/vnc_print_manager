@@ -129,6 +129,80 @@ def _enc_user(user_id):
     return urllib.parse.quote(user_id, safe='')
 
 
+def mxc_to_http(mxc_url, width=None, height=None):
+    """mxc://server/media_id → URL прокси нашего приложения для <img src>.
+
+    Synapse на этой сборке отдаёт медиа только через
+    /_matrix/client/v1/media/* с Authorization-заголовком — браузер
+    напрямую картинку не скачает, поэтому гоняем через /api/matrix/media/.
+    """
+    if not mxc_url or not isinstance(mxc_url, str) or not mxc_url.startswith('mxc://'):
+        return ''
+    rest = mxc_url[6:]
+    path = f'/api/matrix/media/{rest}'
+    if width and height:
+        path += f'?width={int(width)}&height={int(height)}'
+    return path
+
+
+def fetch_media(server, media_id, width=None, height=None):
+    """Скачать медиафайл с Synapse (client v1 media API, требует токен).
+
+    Возвращает (bytes, content_type).
+    """
+    token, _, hs_url = _ensure_token()
+    if width and height:
+        path = (f'/_matrix/client/v1/media/thumbnail/{server}/{media_id}'
+                f'?width={int(width)}&height={int(height)}&method=scale')
+    else:
+        path = f'/_matrix/client/v1/media/download/{server}/{media_id}'
+    req = urllib.request.Request(hs_url + path,
+                                 headers={'Authorization': 'Bearer ' + token})
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+        data = resp.read()
+        ctype = resp.headers.get('Content-Type') or 'application/octet-stream'
+        return data, ctype
+    except urllib.error.HTTPError as e:
+        raw = e.read() or b'{}'
+        try:
+            msg = json.loads(raw).get('error')
+        except ValueError:
+            msg = raw[:200].decode('utf-8', 'replace')
+        raise MatrixError(msg or f'HTTP {e.code}',
+                          e.code if e.code >= 400 else 502)
+    except Exception as e:
+        raise MatrixError(f'Нет связи с media-сервером: {e}', 502)
+
+
+def upload_media(data, content_type='application/octet-stream'):
+    """Загрузить файл в media repo Synapse (POST /_matrix/media/v3/upload).
+
+    data — сырые байты файла. Возвращает mxc:// URL.
+    """
+    token, _, hs_url = _ensure_token()
+    headers = {'Authorization': 'Bearer ' + token,
+               'Content-Type': content_type}
+    req = urllib.request.Request(hs_url + '/_matrix/media/v3/upload',
+                                 data=data, headers=headers, method='POST')
+    try:
+        resp = urllib.request.urlopen(req, timeout=30)
+        out = json.loads(resp.read() or b'{}')
+    except urllib.error.HTTPError as e:
+        raw = e.read() or b'{}'
+        try:
+            out = json.loads(raw)
+        except ValueError:
+            out = {'error': raw[:200].decode('utf-8', 'replace')}
+        raise MatrixError(out.get('error') or f'HTTP {e.code}', e.code)
+    except Exception as e:
+        raise MatrixError(f'Ошибка загрузки медиа: {e}', 502)
+    uri = out.get('content_uri')
+    if not uri or not uri.startswith('mxc://'):
+        raise MatrixError('Сервер не вернул content_uri', 502)
+    return uri
+
+
 def _ms(ts):
     """Synapse в списке отдаёт ms, в деталях — сек; нормализуем к ms."""
     ts = int(ts or 0)
@@ -180,6 +254,8 @@ def list_users():
         result.append({
             'user_id': u.get('name') or '',
             'displayname': u.get('displayname') or '',
+            'avatar_url': mxc_to_http(u.get('avatar_url'), 64, 64),
+            'avatar_mxc': u.get('avatar_url') or '',
             'admin': bool(u.get('admin')),
             'deactivated': bool(u.get('deactivated')),
             'locked': bool(u.get('locked')),
@@ -227,8 +303,13 @@ def create_user(localpart, password=None, displayname='', admin=False):
     return {'user_id': user_id, 'password': password}
 
 
-def update_user(user_id, action, password=None):
-    """Действия: password | deactivate | activate | make_admin | revoke_admin."""
+def update_user(user_id, action, password=None, displayname=None, admin=None,
+                avatar_url=None):
+    """Действия: password | deactivate | activate | make_admin | revoke_admin | profile.
+
+    profile — обновление профиля: displayname, admin и/или avatar_url
+    (mxc:// или пустая строка — сбросить аватар).
+    """
     if not user_id or not user_id.startswith('@'):
         raise MatrixError('Некорректный user_id', 400)
     if action == 'password':
@@ -244,6 +325,17 @@ def update_user(user_id, action, password=None):
         body = {'admin': True}
     elif action == 'revoke_admin':
         body = {'admin': False}
+    elif action == 'profile':
+        body = {}
+        if displayname is not None:
+            body['displayname'] = displayname.strip()
+        if admin is not None:
+            body['admin'] = bool(admin)
+        if avatar_url is not None:
+            au = (avatar_url or '').strip()
+            body['avatar_url'] = au or None  # None сбрасывает аватар
+        if not body:
+            raise MatrixError('Нет данных для обновления профиля', 400)
     else:
         raise MatrixError(f'Неизвестное действие: {action}', 400)
     _request('/_synapse/admin/v2/users/' + _enc_user(user_id), 'PUT', body)
@@ -251,16 +343,27 @@ def update_user(user_id, action, password=None):
 
 
 def list_rooms(limit=100):
-    """Комнаты сервера (админ-API v1)."""
+    """Комнаты сервера (админ-API v1) + аватарки из state-событий."""
     out, server_name = _request(
         f'/_synapse/admin/v1/rooms?limit={int(limit)}&order_by=name')
     rooms = []
     for r in out.get('rooms') or []:
+        room_id = r.get('room_id') or ''
+        avatar_mxc = ''
+        try:
+            av, _ = _request(
+                f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+                f'/state/m.room.avatar')
+            avatar_mxc = av.get('url') or ''
+        except MatrixError:
+            pass
         rooms.append({
-            'room_id': r.get('room_id') or '',
+            'room_id': room_id,
             'name': r.get('name') or '',
             'topic': r.get('topic') or '',
-            'members': int(r.get('num_joined_members') or 0),
+            'avatar_url': mxc_to_http(avatar_mxc, 96, 96),
+            'avatar_mxc': avatar_mxc,
+            'members': int(r.get('joined_members') or 0),
             'public': bool(r.get('public')),
             'federatable': bool(r.get('federatable')),
             'creator': r.get('creator') or '',
@@ -268,6 +371,175 @@ def list_rooms(limit=100):
     rooms.sort(key=lambda x: (-x['members'], x['name'] or x['room_id']))
     return {'rooms': rooms, 'total': out.get('total_rooms', len(rooms)),
             'server_name': server_name}
+
+
+# ---------------------------------------------------------------------------
+# Управление комнатами: создание, инвайт/кик, роли (power levels), удаление
+# ---------------------------------------------------------------------------
+POWER_LEVELS = {0: 'Участник', 50: 'Модератор', 100: 'Админ'}
+
+
+def create_room(name, topic='', invite=None, is_direct=False):
+    """Создать комнату с понятным названием.
+
+    preset=private_chat (по умолчанию), visibility=private — закрытая комната.
+    invite — список user_id, которых сразу пригласить.
+    Возвращает room_id.
+    """
+    name = (name or '').strip()
+    if not name:
+        raise MatrixError('Название комнаты не может быть пустым', 400)
+    body = {
+        'name': name,
+        'preset': 'private_chat',
+        'visibility': 'private',
+    }
+    if (topic or '').strip():
+        body['topic'] = topic.strip()
+    invite = [u.strip() for u in (invite or []) if isinstance(u, str)]
+    invite = [u for u in invite if u.startswith('@')]
+    if invite:
+        body['invite'] = invite
+    if is_direct:
+        body['is_direct'] = True
+    out, _ = _request('/_matrix/client/v3/createRoom', 'POST', body)
+    room_id = out.get('room_id')
+    if not room_id:
+        raise MatrixError('Synapse не вернул room_id при создании комнаты', 502)
+    return {'room_id': room_id, 'name': name}
+
+
+def invite_user(room_id, user_id):
+    """Пригласить пользователя в комнату."""
+    if not user_id or not user_id.startswith('@'):
+        raise MatrixError('Некорректный user_id', 400)
+    _request(f'/_matrix/client/v3/rooms/{_enc_user(room_id)}/invite',
+             'POST', {'user_id': user_id})
+    return True
+
+
+def kick_user(room_id, user_id, reason=''):
+    """Исключить пользователя из комнаты (kick)."""
+    if not user_id or not user_id.startswith('@'):
+        raise MatrixError('Некорректный user_id', 400)
+    body = {'user_id': user_id}
+    if (reason or '').strip():
+        body['reason'] = reason.strip()
+    _request(f'/_matrix/client/v3/rooms/{_enc_user(room_id)}/kick',
+             'POST', body)
+    return True
+
+
+def get_room_members(room_id):
+    """Участники комнаты: joined + invited, с текущими ролями (power levels)."""
+    out, _ = _request(
+        f'/_matrix/client/v3/rooms/{_enc_user(room_id)}/joined_members')
+    joined = out.get('joined') or {}
+
+    # invited (membership=invite) — через /members, invited_members на этой сборке нет
+    out2, _ = _request(
+        f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+        f'/members?membership=invite')
+    invited_ids = {ev.get('state_key') for ev in out2.get('chunk') or []
+                   if ev.get('state_key')}
+
+    # power levels для ролей
+    pl_users = {}
+    try:
+        out3, _ = _request(
+            f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+            f'/state/m.room.power_levels')
+        pl_users = out3.get('users') or {}
+    except MatrixError:
+        pass  # без power levels роли покажем как «Участник» по умолчанию
+
+    members = []
+    for uid, info in joined.items():
+        level = int(pl_users.get(uid, 0))
+        members.append({
+            'user_id': uid,
+            'displayname': (info or {}).get('display_name') or '',
+            'avatar_url': mxc_to_http((info or {}).get('avatar_url'), 48, 48),
+            'membership': 'join',
+            'power_level': level,
+            'role': POWER_LEVELS.get(level, f'Уровень {level}'),
+        })
+    for uid in sorted(invited_ids):
+        members.append({
+            'user_id': uid,
+            'displayname': '',
+            'membership': 'invite',
+            'power_level': None,
+            'role': 'Приглашён',
+        })
+    members.sort(key=lambda x: (x['membership'] != 'join',
+                                -(x['power_level'] or 0),
+                                x['displayname'] or x['user_id']))
+    return {'room_id': room_id, 'members': members}
+
+
+def set_power_level(room_id, user_id, level):
+    """Изменить роль (power level) пользователя в комнате.
+
+    level: 0 (участник), 50 (модератор), 100 (админ).
+    GET текущих power levels → PUT с изменённым users-маппингом.
+    """
+    if not user_id or not user_id.startswith('@'):
+        raise MatrixError('Некорректный user_id', 400)
+    level = int(level)
+    if level not in POWER_LEVELS:
+        raise MatrixError('Уровень должен быть 0 (участник), 50 (модератор) '
+                          'или 100 (админ)', 400)
+    out, _ = _request(
+        f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+        f'/state/m.room.power_levels')
+    body = dict(out)
+    users = dict(body.get('users') or {})
+    users[user_id] = level
+    body['users'] = users
+    _request(f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+             f'/state/m.room.power_levels', 'PUT', body)
+    return True
+
+
+def delete_room(room_id, reason=''):
+    """Удалить комнату (админ-API v2 DELETE с телом {room_id, reason}).
+
+    На этой сборке Synapse DELETE /_synapse/admin/v2/rooms/{id} работает
+    только с JSON-телом; POST .../delete не распознаётся (404).
+    """
+    body = {'room_id': room_id}
+    if (reason or '').strip():
+        body['reason'] = reason.strip()
+    _request(f'/_synapse/admin/v2/rooms/{_enc_user(room_id)}', 'DELETE', body)
+    return True
+
+
+def update_room(room_id, name=None, topic=None, avatar_url=None):
+    """Изменить название/тему/аватар комнаты через state-события.
+
+    m.room.name, m.room.topic, m.room.avatar — state-события с пустым
+    state_key, PUT /rooms/{id}/state/{eventType} (без суффикса txn).
+    avatar_url: mxc:// или пустая строка — сбросить аватар.
+    """
+    if not room_id or not room_id.startswith('!'):
+        raise MatrixError('Некорректный room_id', 400)
+    if name is None and topic is None and avatar_url is None:
+        raise MatrixError('Нет данных для обновления комнаты', 400)
+    if name is not None:
+        name = name.strip()
+        if not name:
+            raise MatrixError('Название комнаты не может быть пустым', 400)
+        _request(f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+                 f'/state/m.room.name', 'PUT', {'name': name})
+    if topic is not None:
+        _request(f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+                 f'/state/m.room.topic', 'PUT', {'topic': topic.strip()})
+    if avatar_url is not None:
+        au = (avatar_url or '').strip()
+        _request(f'/_matrix/client/v3/rooms/{_enc_user(room_id)}'
+                 f'/state/m.room.avatar', 'PUT', {'url': au or None})
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -343,20 +615,42 @@ def _find_broadcast_room(me):
     return None
 
 
-def send_broadcast(message, mode='dm', user_ids=None):
+def send_broadcast(message, mode='dm', user_ids=None, room_id=None):
     """Рассылка выбранным пользователям.
 
     mode='dm'  — личное сообщение каждому (комната DM создаётся при
                   необходимости и запоминается в m.direct);
-    mode='room' — одно сообщение в общий рум «Рассылка VNC Manager»
-                  (необходимые участники приглашаются автоматически).
-    user_ids=[]/None — все активные пользователи сервера.
+    mode='room' — одно сообщение в выбранный общий рум (room_id).
+                  Если room_id не указан — старое поведение: комната
+                  «Рассылка VNC Manager» (создаётся/находится, участники
+                  приглашаются автоматически).
+    user_ids=[]/None — все активные пользователи сервера (только для dm).
+    room_id — id комнаты для mode='room' (из списка list_rooms).
     """
     message = (message or '').strip()
     if not message:
         raise MatrixError('Сообщение не может быть пустым', 400)
     if mode not in ('dm', 'room'):
         raise MatrixError(f'Неизвестный режим рассылки: {mode}', 400)
+
+    if mode == 'room' and room_id:
+        # Отправка в явно выбранный рум: без автоинвайта, просто сообщение
+        room_id = room_id.strip()
+        if not room_id.startswith('!'):
+            raise MatrixError('Некорректный room_id', 400)
+        _send_msg(room_id, message)
+        # имя комнаты — из списка, если удалось
+        room_name = room_id
+        try:
+            for r in list_rooms(limit=200)['rooms']:
+                if r['room_id'] == room_id:
+                    room_name = r['name'] or room_id
+                    break
+        except MatrixError:
+            pass
+        return {'mode': 'room', 'room_id': room_id, 'room_name': room_name,
+                'created': False, 'total': None, 'invited': 0,
+                'sent': 1, 'failed': 0, 'errors': []}
 
     if not user_ids:
         listed = list_users()
@@ -406,7 +700,7 @@ def send_broadcast(message, mode='dm', user_ids=None):
                 'failed': len(errors), 'skipped': skipped,
                 'errors': errors[:20]}
 
-    # mode == 'room'
+    # mode == 'room' без явного room_id — старое поведение «Рассылка VNC Manager»
     created = False
     room_id = _find_broadcast_room(me)
     if not room_id:
