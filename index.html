@@ -2110,6 +2110,14 @@
                 <button class="modal-close" onclick="document.getElementById('matrixRoomMembersModal').classList.remove('active')">&times;</button>
             </div>
             <div class="modal-body">
+                <div id="matrixRoomMembersNotice" style="display: none; background: rgba(245,158,11,.12); border: 1px solid rgba(245,158,11,.35); border-radius: 8px; padding: 10px 12px; margin-bottom: 14px; font-size: 13px;">
+                    <div style="margin-bottom: 8px;">
+                        <i class="fas fa-info-circle" style="color: #f59e0b;"></i>
+                        Администратор не состоит в этой комнате — показан состав без ролей.
+                        Войдите в комнату, чтобы управлять ролями, приглашениями и исключением.
+                    </div>
+                    <button class="btn btn-sm btn-primary" id="matrixRoomJoinBtn"><i class="fas fa-door-open"></i> Войти в комнату</button>
+                </div>
                 <div style="display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap;">
                     <input type="text" id="matrixRoomInviteInput" class="form-input" placeholder="@user:домен" style="flex: 1; min-width: 200px;">
                     <button class="btn btn-primary" id="matrixRoomInviteBtn">Пригласить</button>
@@ -6951,6 +6959,7 @@
         document.getElementById('matrixRoomMembersClose')?.addEventListener('click', () =>
             document.getElementById('matrixRoomMembersModal').classList.remove('active'));
         document.getElementById('matrixRoomInviteBtn')?.addEventListener('click', matrixRoomInvite);
+        document.getElementById('matrixRoomJoinBtn')?.addEventListener('click', matrixRoomJoin);
 
         async function matrixRoomCreate() {
             const nameInput = document.getElementById('matrixRoomNameNew');
@@ -7018,6 +7027,7 @@
             if (!matrixCurrentRoomId) return;
             const list = document.getElementById('matrixRoomMembersList');
             const empty = document.getElementById('matrixRoomMembersEmpty');
+            const notice = document.getElementById('matrixRoomMembersNotice');
             try {
                 const response = await fetch(
                     '/api/matrix/rooms/members?room_id=' +
@@ -7028,6 +7038,14 @@
                     return;
                 }
                 const members = data.members || [];
+                const adminView = !!data.admin_view;
+                if (notice) {
+                    notice.style.display = adminView ? '' : 'none';
+                }
+                const inviteRow = document.getElementById('matrixRoomInviteInput')?.parentElement;
+                if (inviteRow) {
+                    inviteRow.style.display = adminView ? 'none' : '';
+                }
                 if (!members.length) {
                     list.innerHTML = '';
                     if (empty) empty.style.display = 'block';
@@ -7036,14 +7054,20 @@
                 if (empty) empty.style.display = 'none';
                 list.innerHTML = members.map(m => {
                     const isInvite = m.membership === 'invite';
-                    const roleOptions = isInvite
-                        ? '<span style="font-size: 12px; opacity: 0.6;">Приглашён</span>'
-                        : `<select class="form-input" data-pl="${escapeHtml(m.user_id)}" style="height: 30px; width: 140px; margin: 0;">
+                    let roleHtml;
+                    if (isInvite) {
+                        roleHtml = '<span style="font-size: 12px; opacity: 0.6;">Приглашён</span>';
+                    } else if (adminView) {
+                        roleHtml = '';
+                    } else {
+                        roleHtml = `<select class="form-input" data-pl="${escapeHtml(m.user_id)}" style="height: 30px; width: 140px; margin: 0;">
                             <option value="0" ${m.power_level === 0 ? 'selected' : ''}>Участник</option>
                             <option value="50" ${m.power_level === 50 ? 'selected' : ''}>Модератор</option>
                             <option value="100" ${m.power_level === 100 ? 'selected' : ''}>Админ</option>
                            </select>`;
-                    const kickBtn = `<button class="btn btn-sm" data-kick="${escapeHtml(m.user_id)}" title="Исключить"><i class="fas fa-user-minus"></i></button>`;
+                    }
+                    const kickBtn = adminView ? '' :
+                        `<button class="btn btn-sm" data-kick="${escapeHtml(m.user_id)}" title="Исключить"><i class="fas fa-user-minus"></i></button>`;
                     return `<div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
                         ${m.avatar_url
                             ? `<img src="${escapeHtml(m.avatar_url)}" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;">`
@@ -7052,7 +7076,7 @@
                             <div style="font-weight: 600; font-size: 13px;">${escapeHtml(m.displayname || m.user_id)}</div>
                             <div style="font-size: 12px; opacity: 0.6; font-family: monospace;">${escapeHtml(m.user_id)}</div>
                         </div>
-                        ${roleOptions}
+                        ${roleHtml}
                         ${kickBtn}
                     </div>`;
                 }).join('');
@@ -7062,6 +7086,26 @@
                 list.querySelectorAll('[data-kick]').forEach(btn =>
                     btn.addEventListener('click', () =>
                         matrixRoomKick(btn.dataset.kick)));
+            } catch (error) {
+                showNotification('Ошибка соединения', 'error');
+            }
+        }
+
+        async function matrixRoomJoin() {
+            if (!matrixCurrentRoomId) return;
+            try {
+                const response = await fetch('/api/matrix/rooms/join', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ room_id: matrixCurrentRoomId })
+                });
+                const result = await response.json();
+                if (response.ok && result.success) {
+                    showNotification('Вы вошли в комнату — роли и управление доступны', 'success');
+                    await matrixLoadRoomMembers();
+                } else {
+                    showNotification(result.error || 'Ошибка входа в комнату', 'error');
+                }
             } catch (error) {
                 showNotification('Ошибка соединения', 'error');
             }

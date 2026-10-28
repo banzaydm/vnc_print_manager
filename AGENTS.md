@@ -87,14 +87,24 @@ Get-ChildItem C:\Users\Work\Desktop\VNC_mng\backups -Directory
 - **РателIMIT логина ~3 попытки/5 мин на IP** — между живыми прогонами E2E
   выдерживать паузу ≥5 мин, гонять строго по одному прогону.
 - Presence API недоступен (403) — онлайн только по `last_seen_ts`.
+- **Вход админа в invite-only комнату**: прямой `POST /_synapse/admin/v1/join/{id}`
+  → 403 «not in room» (инвайт шлётся от админа вне комнаты). Рабочая цепочка
+  (`join_room()`): клиентский `POST /rooms/{id}/join` → при 403
+  `POST /_synapse/admin/v1/rooms/{id}/make_room_admin` {user_id} (200:
+  инвайт + power level) → повторный клиентский join (200). Комната с
+  `!id` **без домена** в admin API; `!id:домен` → «Can't join remote room».
+- **Состав участников без membership**: `GET /_synapse/admin/v1/rooms/{id}/members`
+  → 200 (только joined, без ролей/invites); профили — `GET /_synapse/admin/v2/users/{uid}`.
+- Админ state-эндпоинты (`/admin/v1/rooms/{id}/state/...`) → 404 — state
+  только через client API после входа в комнату.
 
 ### Проверки
 
 - Смоук `%TEMP%\opencode\matrix_smoke.py` (сеть мокается подменой
-  `matrix_service._http`) — **72/72**: пользователи, комнаты, broadcast,
-  группы, скрытие, маскировка пароля.
+  `matrix_service._http`) — **131/131**: пользователи, комнаты, broadcast,
+  группы, скрытие, маскировка пароля, fallback состава, join-цепочка.
 - Живой E2E `%TEMP%\opencode\_matrix_e2e.py` — создание/DM/рум/очистка;
   гонять **в одиночку** (не параллельно со смоуками: они восстанавливают БД
   и перетирают креды Matrix под ногами).
-- Регресс: routes baseline **63**, `auth 14`, `users 6`, `devices 16`,
+- Регресс: routes baseline **73**, `auth 14`, `users 6`, `devices 16`,
   `multiip 12`, `scan 108`, `cleardb 4` — всё зелёное перед коммитом.

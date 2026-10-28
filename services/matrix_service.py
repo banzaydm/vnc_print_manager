@@ -431,7 +431,25 @@ def kick_user(room_id, user_id, reason=''):
 
 
 def get_room_members(room_id):
-    """Участники комнаты: joined + invited, с текущими ролями (power levels)."""
+    """Участники комнаты: joined + invited, с текущими ролями (power levels).
+
+    Если админ не состоит в комнате (client API → 403 room previews
+    disabled), берём состав через админ-API v1 rooms/{id}/members — без
+    ролей и приглашений (admin_view=True); роли/кик станут доступны после
+    join_room().
+    """
+    if not room_id or not room_id.startswith('!'):
+        raise MatrixError('Некорректный room_id', 400)
+    try:
+        return _room_members_client(room_id)
+    except MatrixError as e:
+        if e.http_code != 403:
+            raise
+        return _room_members_admin(room_id)
+
+
+def _room_members_client(room_id):
+    """Состав через client API (нужен membership админа в комнате)."""
     out, _ = _request(
         f'/_matrix/client/v3/rooms/{_enc_user(room_id)}/joined_members')
     joined = out.get('joined') or {}
@@ -475,7 +493,72 @@ def get_room_members(room_id):
     members.sort(key=lambda x: (x['membership'] != 'join',
                                 -(x['power_level'] or 0),
                                 x['displayname'] or x['user_id']))
-    return {'room_id': room_id, 'members': members}
+    return {'room_id': room_id, 'members': members, 'admin_view': False}
+
+
+def _room_members_admin(room_id):
+    """Состав через админ-API (без membership); роли и invites недоступны."""
+    out, _ = _request(
+        f'/_synapse/admin/v1/rooms/{_enc_user(room_id)}/members')
+    uids = out.get('members') or []
+    members = []
+    for uid in uids:
+        displayname, avatar_mxc = '', ''
+        try:
+            detail, _ = _request(
+                '/_synapse/admin/v2/users/' + _enc_user(uid))
+            displayname = detail.get('displayname') or ''
+            avatar_mxc = detail.get('avatar_url') or ''
+        except MatrixError:
+            pass  # профиль не раскрыт — покажем только user_id
+        members.append({
+            'user_id': uid,
+            'displayname': displayname,
+            'avatar_url': mxc_to_http(avatar_mxc, 48, 48),
+            'membership': 'join',
+            'power_level': None,
+            'role': '',
+        })
+    members.sort(key=lambda x: (x['displayname'] or x['user_id']))
+    return {'room_id': room_id, 'members': members, 'admin_view': True}
+
+
+def join_room(room_id):
+    """Админ входит в комнату для управления составом и ролями.
+
+    На этой сборке Synapse прямой админ-join (/admin/v1/join) для invite-only
+    комнат падает 403: инвайт отправляется от админа, который сам в комнате
+    не состоит. Рабочая цепочка (проверено живьём):
+    1) клиентский POST /rooms/{id}/join — быстрый путь (админ уже в комнате,
+       есть приглашение или комната публичная);
+    2) при 403 — admin rooms/{id}/make_room_admin: локальный юзер с правами
+       приглашает админа и выдаёт ему power level для управления;
+    3) повторный клиентский join принимает приглашение.
+    """
+    if not room_id or not room_id.startswith('!'):
+        raise MatrixError('Некорректный room_id', 400)
+    _token, server_name, _ = _ensure_token()
+    enc = _enc_user(room_id)
+    join_path = f'/_matrix/client/v3/rooms/{enc}/join'
+    try:
+        _request(join_path, 'POST', {})
+        return True
+    except MatrixError as e:
+        if e.http_code != 403:
+            raise
+    mra_err = None
+    try:
+        _request(f'/_synapse/admin/v1/rooms/{enc}/make_room_admin',
+                 'POST', {'user_id': _me_user_id(server_name)})
+    except MatrixError as e:
+        mra_err = e
+    try:
+        _request(join_path, 'POST', {})
+        return True
+    except MatrixError as e:
+        if mra_err is not None:
+            raise MatrixError(f'{mra_err} / {e}', e.http_code or 400)
+        raise
 
 
 def set_power_level(room_id, user_id, level):

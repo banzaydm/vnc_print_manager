@@ -101,6 +101,17 @@ def matrix_room_kick():
         return _err(e)
 
 
+@bp.route('/api/matrix/rooms/join', methods=['POST'])
+def matrix_room_join():
+    """Админ входит в комнату: {room_id} (для управления ролями/составом)."""
+    data = get_json()
+    try:
+        matrix_service.join_room(data.get('room_id'))
+        return jsonify({'success': True})
+    except matrix_service.MatrixError as e:
+        return _err(e)
+
+
 @bp.route('/api/matrix/rooms/power-level', methods=['POST'])
 def matrix_room_power_level():
     """Изменить роль: {room_id, user_id, level: 0|50|100}."""
