@@ -1040,7 +1040,8 @@
 
         /* Выпадающий фильтр групп — внешний вид как у остальных select */
         #groupFilterDropdown {
-            width: 180px;
+            width: 240px;
+            min-width: 240px;
         }
 
         #groupFilterBtn.filter-select {
@@ -1091,6 +1092,24 @@
             padding: 8px;
             border: 1px solid var(--card-border);
             box-shadow: var(--shadow-lg);
+        }
+
+        #groupFilterMenu .group-filter-item,
+        #groupFilterMenu .group-filter-node {
+            border-radius: 8px;
+            transition: background-color 0.15s ease, color 0.15s ease;
+        }
+
+        #groupFilterMenu .group-filter-item:hover,
+        #groupFilterMenu .group-filter-node:hover {
+            background: var(--hover-bg);
+        }
+
+        #groupFilterMenu .group-filter-item.active,
+        #groupFilterMenu .group-filter-node.active {
+            background: var(--primary-light);
+            color: var(--primary);
+            font-weight: 600;
         }
 
         #groupFilterMenu .group-filter-item {
@@ -1349,10 +1368,10 @@
                             </span>
                         </button>
                         <div id="groupFilterMenu" class="card" style="display:none; position:absolute; z-index: 50; left:0; right:0; top: 44px; max-height: 320px; overflow:auto; padding: 8px; border: 1px solid var(--card-border); box-shadow: var(--shadow-lg);">
-                            <div class="group-filter-item" onclick="selectGroupFilter('all', 'Все группы')" style="padding: 8px 10px; border-radius: 8px; cursor:pointer;">
+                            <div class="group-filter-item" data-group-filter-value="all" onclick="selectGroupFilter('all', 'Все группы')" style="padding: 8px 10px; border-radius: 8px; cursor:pointer;">
                                 <strong>Все группы</strong>
                             </div>
-                            <div class="group-filter-item" onclick="selectGroupFilter('ungrouped', 'Без группы')" style="padding: 8px 10px; border-radius: 8px; cursor:pointer;">
+                            <div class="group-filter-item" data-group-filter-value="ungrouped" onclick="selectGroupFilter('ungrouped', 'Без группы')" style="padding: 8px 10px; border-radius: 8px; cursor:pointer;">
                                 Без группы
                             </div>
                             <div style="height: 8px;"></div>
@@ -1554,6 +1573,15 @@
                             <div class="form-group" style="margin-bottom: 16px;">
                                 <label class="form-label">Название приложения</label>
                                 <input type="text" id="appTitleInput" class="form-input" value="VNC Manager" placeholder="VNC Manager">
+                            </div>
+
+                            <!-- Интервал обновления статусов -->
+                            <div class="form-group" style="margin-bottom: 16px;">
+                                <label class="form-label">Обновлять статусы онлайн/офлайн каждые (сек)</label>
+                                <input type="number" id="statusRefreshInput" class="form-input" value="30" min="5" max="600" step="5" placeholder="30">
+                                <div style="font-size: 12px; opacity: 0.7; margin-top: 6px;">
+                                    От 5 до 600 секунд. Пока вкладка скрыта — опрос приостанавливается.
+                                </div>
                             </div>
                         </div>
 
@@ -2582,6 +2610,10 @@
         let _clearDbOptions = { clear_servers: true, clear_printers: true, clear_cameras: true, clear_routers: true, clear_groups: true };
         let expandedGroupFilterNodes = new Set();
         let moveContext = null;
+        // Фоновое обновление статусов онлайн/офлайн (интервал — в Настройках)
+        let statusRefreshSeconds = 30;
+        let statusRefreshTimer = null;
+        let statusRefreshBusy = false;
         
         // Инициализация при загрузке
         document.addEventListener('DOMContentLoaded', async function() {
@@ -2611,6 +2643,8 @@
             // Загружаем данные
             loadData().then(() => {
                 showPage('favorites');
+                // Запускаем фоновое обновление статусов онлайн/офлайн
+                startStatusRefresh();
             });
         });
 
@@ -2861,7 +2895,113 @@
                 renderDevices();
             }
         }
-        
+
+        // ===== Фоновое обновление статусов онлайн/офлайн =====
+        // Опрос лёгкого эндпоинта /api/statuses (только статусы) и точечное
+        // обновление бейджей в DOM: полная перерисовка таблиц сбивала бы
+        // сортировку, раскрытые деревья и фильтры.
+
+        function scheduleStatusRefresh() {
+            if (statusRefreshTimer) {
+                clearTimeout(statusRefreshTimer);
+                statusRefreshTimer = null;
+            }
+            const seconds = Math.max(5, Number(statusRefreshSeconds) || 30);
+            statusRefreshTimer = setTimeout(refreshStatuses, seconds * 1000);
+        }
+
+        function startStatusRefresh() {
+            scheduleStatusRefresh();
+        }
+
+        async function refreshStatuses() {
+            // Не опрашиваем, пока вкладка скрыта, и не наслаиваем запросы
+            if (document.hidden || statusRefreshBusy) {
+                scheduleStatusRefresh();
+                return;
+            }
+
+            statusRefreshBusy = true;
+            try {
+                const response = await fetch('/api/statuses', { cache: 'no-store' });
+                if (response.ok) {
+                    const statuses = await response.json();
+                    applyStatuses(statuses);
+                }
+            } catch (error) {
+                // Проблемы сети не должны ломать интерфейс — пропускаем цикл
+                console.debug('Фоновое обновление статусов пропущено:', error.message);
+            } finally {
+                statusRefreshBusy = false;
+                scheduleStatusRefresh();
+            }
+        }
+
+        function applyStatuses(statuses) {
+            if (!statuses || !devices) return;
+
+            let changed = false;
+            devices.forEach(device => {
+                const next = statuses[`${device.type}_${device.id}`];
+                if (!next) return;
+                if (device.status !== next) {
+                    device.status = next;
+                    changed = true;
+                }
+            });
+
+            if (changed) updateStatusBadges();
+        }
+
+        function updateStatusBadges() {
+            const statusByKey = new Map(
+                devices.map(d => [`${d.type}:${d.id}`, d.status || 'offline'])
+            );
+
+            document.querySelectorAll('.status-badge[data-status-for]').forEach(badge => {
+                const status = statusByKey.get(badge.dataset.statusFor) || 'offline';
+                const className = status === 'online' ? 'status-online' : 'status-offline';
+                if (badge.classList.contains(className)) return;
+
+                badge.classList.remove('status-online', 'status-offline');
+                badge.classList.add(className);
+
+                const text = badge.querySelector('.status-text');
+                if (text) text.textContent = status === 'online' ? 'Онлайн' : 'Офлайн';
+            });
+        }
+
+        // Вкладка скрыта — опрос в фоне не нужен; вернулись — обновляем сразу
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) refreshStatuses();
+        });
+
+        // ===== Поиск по устройствам =====
+
+        function normalizeAlts(alts) {
+            // alts хранится как [{ip, port}], но после редактирования через форму
+            // может остаться строкой — приводим к массиву, чтобы не падать.
+            if (!alts) return [];
+            let list = alts;
+            if (typeof list === 'string') {
+                try { list = JSON.parse(list); } catch (e) { return []; }
+            }
+            if (!Array.isArray(list)) return [];
+            return list.filter(a => a && a.ip);
+        }
+
+        function deviceMatchesSearch(device, term) {
+            if (!term) return true;
+            const altsText = normalizeAlts(device.alts).map(a => a.ip).join(' ');
+            const searchText = [
+                device.name || '',
+                device.comment || '',
+                device.ip || '',
+                altsText
+            ].join(' ').toLowerCase();
+            return searchText.includes(term);
+        }
+
         // Функция немедленного обновления интерфейса (оптимистичное обновление)
         function deviceTypeInfo(type) {
             if (type === 'server') return { typeIcon: 'fa-server', typeText: 'Сервер' };
@@ -2924,6 +3064,7 @@
             if (groupFilter && groupFilterTree) {
                 const currentFilter = groupFilter.value || 'all';
                 renderGroupFilterTree(groupFilterTree);
+                updateGroupFilterActiveState();
 
                 if (currentFilter === 'all') {
                     if (groupFilterLabel) groupFilterLabel.textContent = 'Все группы';
@@ -2992,8 +3133,18 @@
             const groupFilterLabel = document.getElementById('groupFilterLabel');
             if (input) input.value = String(value);
             if (groupFilterLabel) groupFilterLabel.textContent = label;
+            updateGroupFilterActiveState();
             closeGroupFilterMenu();
-            renderDevices();
+            filterDevices();
+        }
+
+        function updateGroupFilterActiveState() {
+            const menu = document.getElementById('groupFilterMenu');
+            if (!menu) return;
+            const value = document.getElementById('groupFilter')?.value || 'all';
+            menu.querySelectorAll('[data-group-filter-value]').forEach(el => {
+                el.classList.toggle('active', el.dataset.groupFilterValue === value);
+            });
         }
 
         function toggleGroupFilterNode(groupId) {
@@ -3028,9 +3179,11 @@
                 }
             });
 
-            const sortByName = (a, b) => (a.name || '').localeCompare(b.name || '');
+            const sortByName = (a, b) => (a.name || '').localeCompare(b.name || '', 'ru');
             roots.sort(sortByName);
             groupMap.forEach(g => g.children.sort(sortByName));
+
+            const currentValue = (document.getElementById('groupFilter')?.value || 'all');
 
             function renderNode(g) {
                 const hasChildren = g.children && g.children.length > 0;
@@ -3041,6 +3194,8 @@
 
                 const header = document.createElement('div');
                 header.className = 'group-filter-node';
+                header.dataset.groupFilterValue = String(g.id);
+                if (currentValue === String(g.id)) header.classList.add('active');
                 header.onclick = () => selectGroupFilter(String(g.id), g.name);
 
                 const toggle = document.createElement('button');
@@ -3655,8 +3810,10 @@
                 }
             });
 
+            const searchTerm = document.getElementById('searchInput')?.value.toLowerCase().trim() || '';
             const devicesByGroup = new Map();
             devices.forEach(device => {
+                if (!deviceMatchesSearch(device, searchTerm)) return;
                 const gid = device.group_id || 0;
                 if (!devicesByGroup.has(gid)) devicesByGroup.set(gid, []);
                 devicesByGroup.get(gid).push(device);
@@ -3757,14 +3914,14 @@
         function renderDeviceIps(device) {
             // Основной адрес + доп. адреса (мелким шрифтом, полный список в title)
             const list = [`${device.ip}${device.port ? ':' + device.port : ''}`];
-            const alts = device.alts || [];
-            alts.forEach(a => list.push(`${a.ip}:${a.port}`));
+            const alts = normalizeAlts(device.alts);
+            alts.forEach(a => list.push(`${a.ip}${a.port ? ':' + a.port : ''}`));
             const titleAttr = alts.length
                 ? ` title="${escapeHtml(list.join(', ')).replace(/"/g, '&quot;')}"`
                 : '';
             let html = `<div style="font-size: 13px;"${titleAttr}>${escapeHtml(list[0])}</div>`;
             for (const a of alts) {
-                html += `<div style="font-size: 11px; opacity: 0.7;">${escapeHtml(a.ip)}:${a.port}</div>`;
+                html += `<div style="font-size: 11px; opacity: 0.7;">${escapeHtml(a.ip)}${a.port ? ':' + a.port : ''}</div>`;
             }
             return html;
         }
@@ -3826,9 +3983,9 @@
                             ${renderDeviceIps(device)}
                         </td>
                         <td>
-                            <span class="status-badge status-${status}">
+                            <span class="status-badge status-${status}" data-status-for="${device.type}:${device.id}">
                                 <span class="status-dot"></span>
-                                ${status === 'online' ? 'Онлайн' : 'Офлайн'}
+                                <span class="status-text">${status === 'online' ? 'Онлайн' : 'Офлайн'}</span>
                             </span>
                         </td>
                         <td>
@@ -3866,8 +4023,10 @@
             emptyState.style.display = 'none';
 
             // Группируем устройства по подсетям
+            const searchTerm = document.getElementById('searchInput')?.value.toLowerCase().trim() || '';
             const devicesBySubnet = new Map();
             devices.forEach(device => {
+                if (!deviceMatchesSearch(device, searchTerm)) return;
                 const subnet = getSubnet(device.ip);
                 if (!devicesBySubnet.has(subnet)) devicesBySubnet.set(subnet, []);
                 devicesBySubnet.get(subnet).push(device);
@@ -3966,9 +4125,9 @@
                             ` : '<span style="opacity: 0.6;">Без группы</span>'}
                         </td>
                         <td>
-                            <span class="status-badge status-${status}">
+                            <span class="status-badge status-${status}" data-status-for="${device.type}:${device.id}">
                                 <span class="status-dot"></span>
-                                ${status === 'online' ? 'Онлайн' : 'Офлайн'}
+                                <span class="status-text">${status === 'online' ? 'Онлайн' : 'Офлайн'}</span>
                             </span>
                         </td>
                     </tr>
@@ -4343,11 +4502,7 @@
                 if (currentPage === 'favorites' && (!device.is_favorite || device.type === 'camera')) return false;
                 
                 // Поиск
-                if (searchTerm) {
-                    const altText = (device.alts || []).map(a => a.ip).join(' ');
-            const searchText = (device.name + ' ' + device.ip + ' ' + altText + ' ' + (device.comment || '')).toLowerCase();
-                    if (!searchText.includes(searchTerm)) return false;
-                }
+                if (searchTerm && !deviceMatchesSearch(device, searchTerm)) return false;
                 
                 // Фильтр по типу
                 if (typeFilter !== 'all' && device.type !== typeFilter) return false;
@@ -4648,9 +4803,9 @@
                             ${renderDeviceIps(device)}
                         </td>
                         <td>
-                            <span class="status-badge status-${status}">
+                            <span class="status-badge status-${status}" data-status-for="${device.type}:${device.id}">
                                 <span class="status-dot"></span>
-                                ${status === 'online' ? 'Онлайн' : 'Офлайн'}
+                                <span class="status-text">${status === 'online' ? 'Онлайн' : 'Офлайн'}</span>
                             </span>
                         </td>
                         <td>
@@ -4718,12 +4873,7 @@
             const searchTerm = document.getElementById('searchInput')?.value.toLowerCase() || '';
             return devices.filter(d => {
                 if (d.type !== 'camera' || !d.is_favorite) return false;
-                if (searchTerm) {
-                    const altText = (d.alts || []).map(a => a.ip).join(' ');
-            const searchText = (d.name + ' ' + d.ip + ' ' + altText + ' ' + (d.comment || '')).toLowerCase();
-                    if (!searchText.includes(searchTerm)) return false;
-                }
-                return true;
+                return deviceMatchesSearch(d, searchTerm);
             }).sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ru'));
         }
 
@@ -4962,7 +5112,17 @@
         }
         
         function filterDevices() {
-            renderDevices();
+            // Диспетчеризация по текущей вкладке: на «Все» и «Подсети»
+            // деревья фильтруются теми же поиском/фильтрами, что и таблицы.
+            if (currentPage === 'all') {
+                renderAllGroupsPage();
+            } else if (currentPage === 'subnets') {
+                renderSubnetsPage();
+            } else if (currentPage === 'groups') {
+                renderGroupsPage();
+            } else {
+                renderDevices();
+            }
         }
         
         function renderGroupsPage() {
@@ -7515,6 +7675,12 @@
                 const appTitleInput = document.getElementById('appTitleInput');
                 if (appTitleInput) appTitleInput.value = settings.app_title || 'VNC Manager';
 
+                const statusRefreshInput = document.getElementById('statusRefreshInput');
+                if (statusRefreshInput) {
+                    const seconds = Number(settings.status_refresh_seconds);
+                    statusRefreshInput.value = Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds) : 30;
+                }
+
                 const rdServerInput = document.getElementById('rdServerInput');
                 if (rdServerInput) rdServerInput.value = settings.rustdesk_server || '';
                 const rdKeyInput = document.getElementById('rdKeyInput');
@@ -7608,6 +7774,14 @@
                 if (matrixHsUrlInput) settings.matrix_hs_url = matrixHsUrlInput.value.trim();
                 if (matrixAdminUserInput) settings.matrix_admin_user = matrixAdminUserInput.value.trim();
                 if (matrixAdminPassInput && matrixAdminPassInput.value) settings.matrix_admin_pass = matrixAdminPassInput.value;
+
+                const statusRefreshInput = document.getElementById('statusRefreshInput');
+                if (statusRefreshInput) {
+                    const parsed = parseInt(statusRefreshInput.value, 10);
+                    settings.status_refresh_seconds = Number.isFinite(parsed)
+                        ? Math.min(600, Math.max(5, parsed))
+                        : 30;
+                }
                 
                 const response = await fetch('/api/settings', {
                     method: 'POST',
@@ -7657,6 +7831,14 @@
                 if (logoText) {
                     logoText.textContent = settings.app_title;
                 }
+            }
+
+            // Интервал фонового обновления статусов
+            const refreshSeconds = Number(settings.status_refresh_seconds);
+            if (Number.isFinite(refreshSeconds) && refreshSeconds > 0) {
+                statusRefreshSeconds = Math.min(600, Math.max(5, refreshSeconds));
+                // Перезапускаем таймер, чтобы новый интервал вступил в силу сразу
+                if (typeof scheduleStatusRefresh === 'function') scheduleStatusRefresh();
             }
         }
 

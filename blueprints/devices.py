@@ -480,3 +480,40 @@ def toggle_favorite(device_type, device_id):
     return jsonify({'success': True, 'id': device_id, 'type': device_type, 'is_favorite': bool(device.is_favorite)})
 
 
+@bp.route('/api/statuses', methods=['GET'])
+def all_statuses():
+    """Лёгкий эндпоинт для фонового обновления статусов устройств.
+
+    Возвращает только статусы ({"server_3": "online", "printer_1": "offline", ...}),
+    без тела устройств — чтобы фронтенд мог часто опрашивать его и точечно
+    обновлять бейджи в DOM, не перерисовывая таблицы.
+
+    id нумеруются независимо в каждой таблице, поэтому ключи префиксуются
+    типом устройства. Пробы идут через кэш статусов (TTL 30 с), так что
+    опрос чаще, чем раз в 30 секунд, не создаёт лишней нагрузки на сеть.
+    """
+    servers = Server.query.all()
+    printers = Printer.query.all()
+    cameras = Camera.query.all()
+    routers = Router.query.all()
+
+    # Статусы держим раздельно: id разных типов совпадают и перезаписывали бы друг друга
+    server_statuses = _fetch_statuses_parallel(servers)
+    printer_statuses = _fetch_statuses_parallel(printers, is_printer=True)
+    camera_statuses = _fetch_statuses_parallel(cameras, is_web=True)
+    router_statuses = _fetch_statuses_parallel(routers, is_web=True)
+
+    def _pack(items, statuses, prefix):
+        return {
+            f'{prefix}_{item.id}': 'online' if statuses.get(item.id) else 'offline'
+            for item in items
+        }
+
+    result = {}
+    result.update(_pack(servers, server_statuses, 'server'))
+    result.update(_pack(printers, printer_statuses, 'printer'))
+    result.update(_pack(cameras, camera_statuses, 'camera'))
+    result.update(_pack(routers, router_statuses, 'router'))
+    return jsonify(result)
+
+
