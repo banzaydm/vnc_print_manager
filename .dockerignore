@@ -40,6 +40,9 @@ Thumbs.db
 # Docker
 .dockerignore
 
+# Тестовый VNC-сервер (отдельная сборка, в образ приложения не входит)
+test-vnc/
+
 # Временные файлы
 *.tmp
 *.temp

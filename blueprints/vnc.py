@@ -273,6 +273,29 @@ def novnc_page(server_id):
     #clipToast.show {{
       opacity: 1;
     }}
+    /* Фолбэк приёма буфера по HTTP: текст с удалённой машины, выделенный
+       для ручного копирования (авто-копирование без жеста недоступно). */
+    .clip-receive {{
+      position: fixed; left: 50%; bottom: 64px; transform: translateX(-50%);
+      z-index: 320; width: 380px; max-width: calc(100vw - 40px);
+      background: var(--panel); border: 1px solid var(--border);
+      border-radius: 8px; padding: 8px 10px; display: none;
+    }}
+    .clip-receive.open {{ display: block; }}
+    .clip-receive-head {{
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 6px;
+    }}
+    .clip-receive textarea {{
+      width: 100%; height: 64px; box-sizing: border-box; resize: vertical;
+      border: 1px solid var(--border); border-radius: 6px;
+      background: var(--bg); color: var(--text); font-size: 13px; padding: 6px 8px;
+    }}
+    .clip-receive-close {{
+      border: 1px solid var(--border); background: var(--bg); color: var(--text);
+      border-radius: 6px; width: 24px; height: 24px; cursor: pointer;
+      line-height: 1; font-size: 14px; padding: 0;
+    }}
   </style>
 </head>
 <body>
@@ -296,6 +319,14 @@ def novnc_page(server_id):
 
   <textarea id="clipCapture" tabindex="-1" placeholder="Ctrl+V — вставить и отправить на удалённую машину"></textarea>
   <div id="clipToast"></div>
+
+  <div id="clipReceive" class="clip-receive">
+    <div class="clip-receive-head">
+      <span>Текст с удалённой машины: выделен — нажмите Ctrl+C</span>
+      <button type="button" id="clipReceiveClose" class="clip-receive-close" title="Закрыть">×</button>
+    </div>
+    <textarea id="clipReceiveText" readonly spellcheck="false"></textarea>
+  </div>
 
   <script type="module">
     import RFB from 'https://cdn.jsdelivr.net/gh/novnc/noVNC@v{NOVNC_CDN_VERSION}/core/rfb.js';
@@ -436,7 +467,12 @@ def novnc_page(server_id):
     // ---------- Буфер обмена ----------
     const clipCapture = document.getElementById('clipCapture');
     const clipToast = document.getElementById('clipToast');
+    const clipReceive = document.getElementById('clipReceive');
+    const clipReceiveText = document.getElementById('clipReceiveText');
     let clipToastTimer = null;
+    // Идёт проброс синтетического Ctrl+V на canvas — наш window-обработчик
+    // keydown в этот момент не должен перехватывать эти события.
+    let clipForwarding = false;
 
     // Кодировка legacy-буфера. По умолчанию CP1251: TightVNC на русской Windows
     // передаёт клиенту буфер в системной ANSI-кодировке. После первого приёма
@@ -508,33 +544,71 @@ def novnc_page(server_id):
       clipToastTimer = setTimeout(() => clipToast.classList.remove('show'), 2600);
     }}
 
+    // HTTP (insecure context): navigator.clipboard недоступен, а execCommand
+    // 'copy' без пользовательского жеста возвращает false. Показываем текст
+    // выделенным — пользователь копирует его сам нажатием Ctrl+C (жест есть).
+    function showReceiveBox(text) {{
+      clipReceiveText.value = text;
+      clipReceive.classList.add('open');
+      showClipToast('Авто-копирование недоступно по HTTP: текст выделен, нажмите Ctrl+C');
+      clipReceiveText.focus();
+      clipReceiveText.select();
+    }}
+
+    function hideReceiveBox() {{
+      if (!clipReceive.classList.contains('open')) return;
+      clipReceive.classList.remove('open');
+      const cv = screen.querySelector('canvas');
+      if (cv) {{ try {{ cv.focus({{ preventScroll: true }}); }} catch (_) {{}} }}
+    }}
+
+    document.getElementById('clipReceiveClose').addEventListener('click', hideReceiveBox);
+    clipReceiveText.addEventListener('copy', () => {{
+      showClipToast('Скопировано с удалённой машины');
+      setTimeout(hideReceiveBox, 100);
+    }});
+    window.addEventListener('keydown', (e) => {{
+      if (e.key === 'Escape' && clipReceive.classList.contains('open')) {{
+        e.stopPropagation();
+        hideReceiveBox();
+      }}
+    }}, true);
+
     function writeToLocalClipboard(text) {{
       if (navigator.clipboard && navigator.clipboard.writeText) {{
         navigator.clipboard.writeText(text)
           .then(() => showClipToast('Скопировано с удалённой машины'))
-          .catch(() => {{
-            try {{ legacyCopy(text); }} catch (_) {{}}
-          }});
+          .catch(() => copyViaExecCommand(text));
       }} else {{
-        try {{ legacyCopy(text); }} catch (_) {{}}
+        // HTTP: navigator.clipboard в insecure context просто нет
+        copyViaExecCommand(text);
       }}
     }}
 
-    function legacyCopy(text) {{
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      ta.style.cssText = 'position:fixed; top:0; left:0; width:2px; height:2px; opacity:0;';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      const ok = document.execCommand('copy');
-      ta.remove();
-      if (ok) showClipToast('Скопировано с удалённой машины');
-      else showClipToast('Текст получен с удалённой машины');
+    function copyViaExecCommand(text) {{
+      let ok = false;
+      try {{
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed; top:0; left:0; width:2px; height:2px; opacity:0;';
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        ok = document.execCommand('copy');
+        ta.remove();
+      }} catch (_) {{ ok = false; }}
+      if (ok) {{
+        showClipToast('Скопировано с удалённой машины');
+      }} else {{
+        // Жеста нет — буфер не изменился: даём текст для ручного Ctrl+C
+        showReceiveBox(text);
+      }}
     }}
 
     function sendToRemote(text) {{
-      if (!text || !rfb) return;
+      if (!rfb) {{ showClipToast('Нет подключения к удалённой машине'); return; }}
+      if (!text) {{ showClipToast('В буфере нет текста'); return; }}
+      let sent = false;
       try {{
         // Extended clipboard (UTF-8) noVNC обрабатывает сам.
         // В legacy-режиме noVNC кодирует текст как Latin-1 и заменяет символы
@@ -555,45 +629,157 @@ def novnc_page(server_id):
           for (let i = 0; i < bytes.length; i++) latin += String.fromCharCode(bytes[i]);
           rfb.clipboardPasteFrom(latin);
         }}
-      }} catch (_) {{}}
+        sent = true;
+      }} catch (_) {{ sent = false; }}
+      if (!sent) {{ showClipToast('Не удалось отправить буфер'); return; }}
       showClipToast('Отправлено на удалённую машину');
+      // Буфер удалённой машины обновлён — пробрасываем в неё ещё и нажатие
+      // Ctrl+V, чтобы текст встал в активное поле сразу, тем же действием.
+      // После этого работают любые способы вставки на самой удалённой машине:
+      // её Ctrl+V, её контекстное меню → «Вставить» и т.д.
+      setTimeout(forwardCtrlVToRemote, 150);
+    }}
+
+    // Проброс Ctrl+V на удалённую машину синтетическими событиями на canvas:
+    // noVNC не проверяет isTrusted и маппит клавиши по event.code / event.key.
+    // Порядок важен: noVNC на Windows при ControlLeft ждёт 100 мс (AltGr),
+    // поэтому V уходит следом сразу — обработатель сам дожмёт Ctrl и отправит
+    // его раньше V.
+    function forwardCtrlVToRemote() {{
+      if (!rfb) return;
+      const cv = screen.querySelector('canvas');
+      if (!cv) return;
+      // Синтетические события всплывают до window, где наш же capture-
+      // обработчик их перехватывает и глушит (stopPropagation) — noVNC не
+      // увидел бы V. Поднимаем флаг: обработчик в этот момент не трогает
+      // события (диспатч синхронный, флаг снимается сразу после).
+      const fwd = (type, code, key, ctrl) => {{
+        clipForwarding = true;
+        try {{
+          cv.dispatchEvent(new KeyboardEvent(type, {{
+            bubbles: true, cancelable: true, key: key, code: code, ctrlKey: ctrl
+          }}));
+        }} finally {{
+          clipForwarding = false;
+        }}
+      }};
+      fwd('keydown', 'ControlLeft', 'Control', true);
+      // noVNC при ControlLeft на Windows вооружает AltGr и ДЕРЖИТ Ctrl до
+      // события V либо таймаута 100 мс (_handleAltGrTimeout). Если V прийти
+      // раньше 100 мс, обработчик отправит Ctrl↓ и V↓ в одном тике — x11vnc
+      // впрыснет их в XTEST мгновенно и приложение не увидит Ctrl+V (паст
+      // не срабатывает, проверено). Ждём > 100 мс, чтобы Ctrl↓ ушёл через
+      // AltGr-таймаут, и только потом шлём V с паузами между нажатиями.
+      setTimeout(() => fwd('keydown', 'KeyV', 'v', true), 150);
+      setTimeout(() => fwd('keyup', 'KeyV', 'v', false), 190);
+      setTimeout(() => fwd('keyup', 'ControlLeft', 'Control', false), 230);
     }}
 
     // Отправка локального буфера на удалённую машину по Ctrl+V.
     // Перехват в фазе capture, чтобы срабатывать раньше обработчиков noVNC.
     window.addEventListener('keydown', (e) => {{
+      if (clipForwarding) return; // наши синтетические события — пропускаем в noVNC
       const ae = document.activeElement;
-      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) return;
+      if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA')) {{
+        // Фокус в «чужом» поле — не трогаем. Но если это наш бокс, который уже
+        // закрылся (фокус в него по какой-то причине остался) — это не чужое
+        // поле, а продолжение нашего сценария: начинаем вставку заново.
+        if (ae !== clipCapture || clipCapture.classList.contains('open')) return;
+      }}
       if (!(e.ctrlKey || e.metaKey)) return;
-      if (e.key.toLowerCase() !== 'v') return;
+      if (!e.key || e.key.toLowerCase() !== 'v') return;
+      // Ctrl+V не должен уйти на удалённую машину (она вставила бы свой же
+      // буфер), но default-действие браузера (вставка) НЕ отменяем:
+      // именно оно порождает событие paste с текстом локального буфера.
+      // Раньше здесь стоял preventDefault — вставка отменялась целиком,
+      // paste не наступал и бокс висел пустым (баг: локальная → удалённая).
+      e.stopPropagation();
       if (navigator.clipboard && navigator.clipboard.readText) {{
-        // HTTPS: читаем буфер напрямую (вызов происходит в рамках жеста пользователя)
+        // HTTPS: читаем буфер напрямую (вызов в рамках жеста пользователя)
         e.preventDefault();
-        navigator.clipboard.readText().then(sendToRemote).catch(() => {{
-          openClipCapture();
-        }});
+        clipCapture._handled = false;
+        navigator.clipboard.readText()
+          .then((text) => finishClipCapture(text, null))
+          .catch(() => openClipCapture());
       }} else {{
-        // HTTP: перенаправляем вставку в скрытое поле и забираем текст оттуда
-        e.preventDefault();
+        // HTTP: переводим фокус в скрытое поле и оставляем вставку браузеру —
+        // paste-событие придёт именно в него с clipboardData.
         openClipCapture();
       }}
     }}, true);
 
     function openClipCapture() {{
+      if (!clipCapture.classList.contains('open')) {{
+        clipCapture._prevFocus = document.activeElement;
+      }}
       clipCapture.value = '';
       clipCapture.classList.add('open');
-      clipCapture.focus();
       clipCapture._handled = false;
-      const onInput = () => {{
-        if (clipCapture._handled) return;
-        clipCapture._handled = true;
-        const text = clipCapture.value;
-        clipCapture.classList.remove('open');
-        sendToRemote(text);
-      }};
-      clipCapture.addEventListener('input', onInput);
-      clipCapture.addEventListener('paste', onInput);
+      clipCapture.focus();
+      clearTimeout(clipCapture._hintTimer);
+      // Некоторые браузеры не переносят вставку на только что сфокусированное
+      // поле — тогда paste не придёт вообще. Подсказываем повторить Ctrl+V
+      // (бокс уже в фокусе, второй раз вставка гарантированно попадёт сюда).
+      clipCapture._hintTimer = setTimeout(() => {{
+        if (clipCapture.classList.contains('open') && !clipCapture._handled) {{
+          showClipToast('Вставка не сработала — нажмите Ctrl+V ещё раз');
+        }}
+      }}, 600);
     }}
+
+    function finishClipCapture(text, evt) {{
+      if (clipCapture._handled) return;
+      clipCapture._handled = true;
+      clearTimeout(clipCapture._hintTimer);
+      if (evt) evt.preventDefault(); // текст уже забран из события — не вставлять
+      closeClipCapture();
+      sendToRemote(text);
+    }}
+
+    function closeClipCapture() {{
+      if (!clipCapture.classList.contains('open')) return;
+      clipCapture.classList.remove('open');
+      clipCapture.value = '';
+      // Вернуть фокус туда, откуда пришли Ctrl+V. body программно не
+      // фокусируется — в этом (и в прочих «нефокусируемых» случаях) берём
+      // canvas noVNC, чтобы клавиатура сразу шла на удалённую машину.
+      const prev = clipCapture._prevFocus;
+      clipCapture._prevFocus = null;
+      const usable = prev && prev !== clipCapture && prev !== document.body &&
+                     document.contains(prev);
+      const target = usable ? prev : screen.querySelector('canvas');
+      if (target) {{ try {{ target.focus({{ preventScroll: true }}); }} catch (_) {{}} }}
+      // Страховка: фокус не должен остаться в скрытом боксе — иначе следующий
+      // Ctrl+V уйдёт в нативную вставку в него и обработчик молчит.
+      if (document.activeElement === clipCapture) {{
+        try {{ clipCapture.blur(); }} catch (_) {{}}
+      }}
+    }}
+
+    // Обработчики ставятся ОДИН раз: раньше openClipCapture добавлял их при
+    // каждом открытии бокса, и они накапливались.
+    // paste наступает ДО вставки, поэтому поле там ещё пустое — читаем текст
+    // из clipboardData события, а не из clipCapture.value (раньше это давало
+    // '' → sendToRemote('') молча выходил → _handled гасил реальный input).
+    clipCapture.addEventListener('paste', (e) => {{
+      if (clipCapture._handled) return;
+      if (!e.clipboardData) return; // данных нет — пусть вставит, обработает input
+      let text = '';
+      try {{ text = e.clipboardData.getData('text/plain'); }} catch (_) {{ return; }}
+      finishClipCapture(text, e);
+    }});
+
+    let clipInputTimer = null;
+    clipCapture.addEventListener('input', () => {{
+      if (clipCapture._handled) return;
+      // Фолбэк: paste не пришёл (браузер вставил текст сам, либо пользователь
+      // печатает в боксе вручную) — отправляем накопленное после короткой паузы.
+      clearTimeout(clipInputTimer);
+      clipInputTimer = setTimeout(() => {{
+        if (clipCapture._handled) return;
+        finishClipCapture(clipCapture.value, null);
+      }}, 200);
+    }});
 
     // Автоподключение
     connect();

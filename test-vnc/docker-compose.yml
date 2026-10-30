@@ -1,0 +1,18 @@
+# Тестовый VNC-сервер (не удалять — оставлен для будущих проверок буфера обмена).
+# Запуск: docker compose -f test-vnc/docker-compose.yml up -d --build
+# Пароль VNC: testvnc
+# Хост: 192.168.17.99:5901 (и по имени сервиса "vnc-test" из контейнера приложения).
+services:
+  vnc-test:
+    build: .
+    container_name: vnc-test-server
+    ports:
+      - "5901:5901"
+    restart: unless-stopped
+    networks:
+      - vnc_net
+
+networks:
+  vnc_net:
+    external: true
+    name: work-w_vnc_net
